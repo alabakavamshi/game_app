@@ -1,0 +1,134 @@
+{
+  "project_info": {
+    "project_number": "427126638951",
+    "project_id": "game-39b8e",
+    "storage_bucket": "game-39b8e.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:427126638951:android:fdb88b4f3a42c141ca47c2",
+        "android_client_info": {
+          "package_name": "com.example.badminton_tournament"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "427126638951-n7kagd2jue1da2hoq0q2l9h2ml0bf5vk.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.badminton_tournament",
+            "certificate_hash": "38ccf6e37ad6c26f53a7701ab45eed8decb7e55a"
+          }
+        },
+        {
+          "client_id": "427126638951-3ofv1odq0e660lge9n2f8n8de8uj4u69.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDMPRkvSHRjQSxOirhf2Az0KZuFdtZfB5U"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "427126638951-3ofv1odq0e660lge9n2f8n8de8uj4u69.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "427126638951-pq2bdu18vk90mveummkb64guc0k2hqig.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.game"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:427126638951:android:214e44314b795138ca47c2",
+        "android_client_info": {
+          "package_name": "com.example.game_app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "427126638951-t9aald6dp1ub13fbmqbkits1sa6isqc5.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.game_app",
+            "certificate_hash": "38ccf6e37ad6c26f53a7701ab45eed8decb7e55a"
+          }
+        },
+        {
+          "client_id": "427126638951-3ofv1odq0e660lge9n2f8n8de8uj4u69.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDMPRkvSHRjQSxOirhf2Az0KZuFdtZfB5U"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "427126638951-3ofv1odq0e660lge9n2f8n8de8uj4u69.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "427126638951-pq2bdu18vk90mveummkb64guc0k2hqig.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.game"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:427126638951:android:5217d76fc00ddd2eca47c2",
+        "android_client_info": {
+          "package_name": "com.game.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "427126638951-3ofv1odq0e660lge9n2f8n8de8uj4u69.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDMPRkvSHRjQSxOirhf2Az0KZuFdtZfB5U"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "427126638951-3ofv1odq0e660lge9n2f8n8de8uj4u69.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "427126638951-pq2bdu18vk90mveummkb64guc0k2hqig.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.game"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
