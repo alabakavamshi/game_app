@@ -1,20 +1,21 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
+import 'package:timezone/timezone.dart' as tz;
 
 class Tournament {
   final String id;
   final String name;
   final String venue;
   final String city;
-  final DateTime startDate;
-  final TimeOfDay startTime;
+  final DateTime startDate; // UTC timestamp containing both date and time
   final DateTime? endDate;
   final double entryFee;
   final String status;
   final String createdBy;
   final DateTime createdAt;
   final List<Map<String, dynamic>> participants;
-  final String? rules; // Changed to nullable
+  final String? rules;
   final int maxParticipants;
   final String gameFormat;
   final String gameType;
@@ -22,7 +23,8 @@ class Tournament {
   final bool costShared;
   final List<Map<String, dynamic>> matches;
   final List<Map<String, dynamic>> teams;
-   String? profileImage;
+  final String? profileImage;
+  final String timezone;
 
   Tournament({
     required this.id,
@@ -30,14 +32,13 @@ class Tournament {
     required this.venue,
     required this.city,
     required this.startDate,
-    required this.startTime,
     this.endDate,
     required this.entryFee,
     required this.status,
     required this.createdBy,
     required this.createdAt,
     required this.participants,
-    this.rules, // Made optional
+    this.rules,
     required this.maxParticipants,
     required this.gameFormat,
     required this.gameType,
@@ -46,6 +47,7 @@ class Tournament {
     this.matches = const [],
     this.teams = const [],
     this.profileImage,
+    required this.timezone,
   });
 
   Map<String, dynamic> toFirestore() {
@@ -55,17 +57,13 @@ class Tournament {
       'venue': venue,
       'city': city,
       'startDate': Timestamp.fromDate(startDate),
-      'startTime': {
-        'hour': startTime.hour,
-        'minute': startTime.minute,
-      },
       'endDate': endDate != null ? Timestamp.fromDate(endDate!) : null,
       'entryFee': entryFee,
       'status': status,
       'createdBy': createdBy,
       'createdAt': Timestamp.fromDate(createdAt),
       'participants': participants,
-      'rules': rules, // Can be null
+      'rules': rules,
       'maxParticipants': maxParticipants,
       'gameFormat': gameFormat,
       'gameType': gameType,
@@ -74,14 +72,15 @@ class Tournament {
       'matches': matches,
       'teams': teams,
       'profileImage': profileImage,
+      'timezone': timezone,
     };
   }
 
   factory Tournament.fromFirestore(Map<String, dynamic> data, String id) {
-    final startDate =
-        (data['startDate'] as Timestamp?)?.toDate() ?? DateTime.now();
-    final startTimeData =
-        data['startTime'] as Map<String, dynamic>? ?? {'hour': 0, 'minute': 0};
+    final startDateTimestamp = data['startDate'] as Timestamp? ?? Timestamp.now();
+    final timezoneName = data['timezone'] as String? ?? 'UTC';
+   
+    final startDate = startDateTimestamp.toDate();
 
     return Tournament(
       id: id,
@@ -89,10 +88,6 @@ class Tournament {
       venue: data['venue'] ?? '',
       city: data['city'] ?? '',
       startDate: startDate,
-      startTime: TimeOfDay(
-        hour: startTimeData['hour'] as int,
-        minute: startTimeData['minute'] as int,
-      ),
       endDate: data['endDate'] != null
           ? (data['endDate'] as Timestamp).toDate()
           : null,
@@ -101,7 +96,7 @@ class Tournament {
       createdBy: data['createdBy'] ?? '',
       createdAt: (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
       participants: List<Map<String, dynamic>>.from(data['participants'] ?? []),
-      rules: data['rules'] as String?, // Handle null rules
+      rules: data['rules'] as String?,
       maxParticipants: data['maxParticipants'] ?? 0,
       gameFormat: data['gameFormat'] ?? 'Singles',
       gameType: data['gameType'] ?? 'Tournament',
@@ -110,6 +105,19 @@ class Tournament {
       matches: List<Map<String, dynamic>>.from(data['matches'] ?? []),
       teams: List<Map<String, dynamic>>.from(data['teams'] ?? []),
       profileImage: data['profileImage'] as String?,
+      timezone: timezoneName,
     );
+  }
+
+  // Helper method to get TimeOfDay from startDate for display purposes
+  TimeOfDay getStartTime() {
+    final localStartDate = tz.TZDateTime.from(startDate, tz.getLocation(timezone));
+    return TimeOfDay(hour: localStartDate.hour, minute: localStartDate.minute);
+  }
+
+  // Helper method to get formatted time string
+  String getFormattedStartTime() {
+    final localStartDate = tz.TZDateTime.from(startDate, tz.getLocation(timezone));
+    return DateFormat('hh:mm a').format(localStartDate);
   }
 }

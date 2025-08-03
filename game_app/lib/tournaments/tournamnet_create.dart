@@ -7,6 +7,8 @@ import 'package:intl/intl.dart';
 import 'package:toastification/toastification.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:geocoding/geocoding.dart';
+import 'package:timezone/timezone.dart' as tz;
+import 'package:timezone/data/latest.dart' as tz;
 
 class CreateTournamentPage extends StatefulWidget {
   final String userId;
@@ -42,9 +44,9 @@ class _CreateTournamentPageState extends State<CreateTournamentPage> with Single
   final _entryFeeController = TextEditingController();
   final _rulesController = TextEditingController();
   final _maxParticipantsController = TextEditingController();
-  DateTime? _selectedDate;
+  tz.TZDateTime? _selectedDate;
   TimeOfDay? _selectedTime;
-  DateTime? _selectedEndDate;
+  tz.TZDateTime? _selectedEndDate;
   String _playStyle = "Men's Singles";
   String _eventType = 'Knockout';
   bool _bringOwnEquipment = false;
@@ -58,27 +60,521 @@ class _CreateTournamentPageState extends State<CreateTournamentPage> with Single
   late Animation<double> _fadeAnimation;
   late Animation<Offset> _slideAnimation;
   Timer? _debounceTimer;
+  String _selectedTimezone = 'UTC'; // Default to UTC
 
-  final Map<String, String> _validCities = {
-    'hyderabad': 'Hyderabad',
-    'mumbai': 'Mumbai',
-    'delhi': 'Delhi',
-    'bengaluru': 'Bengaluru',
-    'chennai': 'Chennai',
-    'kolkata': 'Kolkata',
-    'pune': 'Pune',
-    'ahmedabad': 'Ahmedabad',
-    'jaipur': 'Jaipur',
-    'lucknow': 'Lucknow',
-    'karimnagar': 'Karimnagar',
+  static const Map<String, String> _cityToTimezone = {
+    'new york': 'America/New_York',
+    'los angeles': 'America/Los_Angeles',
+    'california': 'America/Los_Angeles',
+    'san francisco': 'America/Los_Angeles',
+    'chicago': 'America/Chicago',
+    'houston': 'America/Chicago',
+    'phoenix': 'America/Phoenix',
+    'philadelphia': 'America/New_York',
+    'san antonio': 'America/Chicago',
+    'san diego': 'America/Los_Angeles',
+    'dallas': 'America/Chicago',
+    'austin': 'America/Chicago',
+    'toronto': 'America/Toronto',
+    'montreal': 'America/Toronto',
+    'vancouver': 'America/Vancouver',
+    'calgary': 'America/Edmonton',
+    'ottawa': 'America/Toronto',
+    'mexico city': 'America/Mexico_City',
+    'tijuana': 'America/Tijuana',
+    'monterrey': 'America/Monterrey',
+    'london': 'Europe/London',
+    'paris': 'Europe/Paris',
+    'berlin': 'Europe/Berlin',
+    'rome': 'Europe/Rome',
+    'madrid': 'Europe/Madrid',
+    'mumbai': 'Asia/Kolkata',
+    'delhi': 'Asia/Kolkata',
+    'bangalore': 'Asia/Kolkata',
+    'hyderabad': 'Asia/Kolkata',
+    'chennai': 'Asia/Kolkata',
+    'kolkata': 'Asia/Kolkata',
+    'singapore': 'Asia/Singapore',
+    'tokyo': 'Asia/Tokyo',
+    'beijing': 'Asia/Shanghai',
+    'shanghai': 'Asia/Shanghai',
+    'hong kong': 'Asia/Hong_Kong',
+    'dubai': 'Asia/Dubai',
+    'sydney': 'Australia/Sydney',
+    'melbourne': 'Australia/Melbourne',
+    'brisbane': 'Australia/Brisbane',
+    'perth': 'Australia/Perth',
+    'sao paulo': 'America/Sao_Paulo',
+    'rio de janeiro': 'America/Sao_Paulo',
+    'buenos aires': 'America/Argentina/Buenos_Aires',
+    'lima': 'America/Lima',
+    'cairo': 'Africa/Cairo',
+    'nairobi': 'Africa/Nairobi',
+    'lagos': 'Africa/Lagos',
+    'johannesburg': 'Africa/Johannesburg',
   };
+
+  static const List<String> _allTimezones = [
+   'UTC',
+    'Africa/Abidjan',
+    'Africa/Accra',
+    'Africa/Addis_Ababa',
+    'Africa/Algiers',
+    'Africa/Asmara',
+    'Africa/Bamako',
+    'Africa/Bangui',
+    'Africa/Banjul',
+    'Africa/Bissau',
+    'Africa/Blantyre',
+    'Africa/Brazzaville',
+    'Africa/Bujumbura',
+    'Africa/Cairo',
+    'Africa/Casablanca',
+    'Africa/Ceuta',
+    'Africa/Conakry',
+    'Africa/Dakar',
+    'Africa/Dar_es_Salaam',
+    'Africa/Djibouti',
+    'Africa/Douala',
+    'Africa/El_Aaiun',
+    'Africa/Freetown',
+    'Africa/Gaborone',
+    'Africa/Harare',
+    'Africa/Johannesburg',
+    'Africa/Juba',
+    'Africa/Kampala',
+    'Africa/Khartoum',
+    'Africa/Kigali',
+    'Africa/Kinshasa',
+    'Africa/Lagos',
+    'Africa/Libreville',
+    'Africa/Lome',
+    'Africa/Luanda',
+    'Africa/Lubumbashi',
+    'Africa/Lusaka',
+    'Africa/Malabo',
+    'Africa/Maputo',
+    'Africa/Maseru',
+    'Africa/Mbabane',
+    'Africa/Mogadishu',
+    'Africa/Monrovia',
+    'Africa/Nairobi',
+    'Africa/Ndjamena',
+    'Africa/Niamey',
+    'Africa/Nouakchott',
+    'Africa/Ouagadougou',
+    'Africa/Porto-Novo',
+    'Africa/Sao_Tome',
+    'Africa/Tripoli',
+    'Africa/Tunis',
+    'Africa/Windhoek',
+    'America/Adak',
+    'America/Anchorage',
+    'America/Anguilla',
+    'America/Antigua',
+    'America/Araguaina',
+    'America/Argentina/Buenos_Aires',
+    'America/Argentina/Catamarca',
+    'America/Argentina/Cordoba',
+    'America/Argentina/Jujuy',
+    'America/Argentina/La_Rioja',
+    'America/Argentina/Mendoza',
+    'America/Argentina/Rio_Gallegos',
+    'America/Argentina/Salta',
+    'America/Argentina/San_Juan',
+    'America/Argentina/San_Luis',
+    'America/Argentina/Tucuman',
+    'America/Argentina/Ushuaia',
+    'America/Aruba',
+    'America/Asuncion',
+    'America/Atikokan',
+    'America/Bahia',
+    'America/Bahia_Banderas',
+    'America/Barbados',
+    'America/Belem',
+    'America/Belize',
+    'America/Blanc-Sablon',
+    'America/Boa_Vista',
+    'America/Bogota',
+    'America/Boise',
+    'America/Cambridge_Bay',
+    'America/Campo_Grande',
+    'America/Cancun',
+    'America/Caracas',
+    'America/Cayenne',
+    'America/Cayman',
+    'America/Chicago',
+    'America/Chihuahua',
+    'America/Costa_Rica',
+    'America/Creston',
+    'America/Cuiaba',
+    'America/Curacao',
+    'America/Danmarkshavn',
+    'America/Dawson',
+    'America/Dawson_Creek',
+    'America/Denver',
+    'America/Detroit',
+    'America/Dominica',
+    'America/Edmonton',
+    'America/Eirunepe',
+    'America/El_Salvador',
+    'America/Fort_Nelson',
+    'America/Fortaleza',
+    'America/Glace_Bay',
+    'America/Godthab',
+    'America/Goose_Bay',
+    'America/Grand_Turk',
+    'America/Grenada',
+    'America/Guadeloupe',
+    'America/Guatemala',
+    'America/Guayaquil',
+    'America/Guyana',
+    'America/Halifax',
+    'America/Havana',
+    'America/Hermosillo',
+    'America/Indiana/Indianapolis',
+    'America/Indiana/Knox',
+    'America/Indiana/Marengo',
+    'America/Indiana/Petersburg',
+    'America/Indiana/Tell_City',
+    'America/Indiana/Vevay',
+    'America/Indiana/Vincennes',
+    'America/Indiana/Winamac',
+    'America/Inuvik',
+    'America/Iqaluit',
+    'America/Jamaica',
+    'America/Juneau',
+    'America/Kentucky/Louisville',
+    'America/Kentucky/Monticello',
+    'America/Kralendijk',
+    'America/La_Paz',
+    'America/Lima',
+    'America/Los_Angeles',
+    'America/Lower_Princes',
+    'America/Maceio',
+    'America/Managua',
+    'America/Manaus',
+    'America/Marigot',
+    'America/Martinique',
+    'America/Matamoros',
+    'America/Mazatlan',
+    'America/Menominee',
+    'America/Merida',
+    'America/Metlakatla',
+    'America/Mexico_City',
+    'America/Miquelon',
+    'America/Moncton',
+    'America/Monterrey',
+    'America/Montevideo',
+    'America/Montserrat',
+    'America/Nassau',
+    'America/New_York',
+    'America/Nipigon',
+    'America/Nome',
+    'America/Noronha',
+    'America/North_Dakota/Beulah',
+    'America/North_Dakota/Center',
+    'America/North_Dakota/New_Salem',
+    'America/Ojinaga',
+    'America/Panama',
+    'America/Pangnirtung',
+    'America/Paramaribo',
+    'America/Phoenix',
+    'America/Port-au-Prince',
+    'America/Port_of_Spain',
+    'America/Porto_Velho',
+    'America/Puerto_Rico',
+    'America/Punta_Arenas',
+    'America/Rainy_River',
+    'America/Rankin_Inlet',
+    'America/Recife',
+    'America/Regina',
+    'America/Resolute',
+    'America/Rio_Branco',
+    'America/Santarem',
+    'America/Santo_Domingo',
+    'America/Sao_Paulo',
+    'America/Scoresbysund',
+    'America/Sitka',
+    'America/St_Barthelemy',
+    'America/St_Johns',
+    'America/St_Kitts',
+    'America/St_Lucia',
+    'America/St_Thomas',
+    'America/St_Vincent',
+    'America/Swift_Current',
+    'America/Tegucigalpa',
+    'America/Thule',
+    'America/Thunder_Bay',
+    'America/Tijuana',
+    'America/Toronto',
+    'America/Tortola',
+    'America/Vancouver',
+    'America/Whitehorse',
+    'America/Winnipeg',
+    'America/Yakutat',
+    'America/Yellowknife',
+    'Antarctica/Casey',
+    'Antarctica/Davis',
+    'Antarctica/DumontDUrville',
+    'Antarctica/Macquarie',
+    'Antarctica/Mawson',
+    'Antarctica/McMurdo',
+    'Antarctica/Palmer',
+    'Antarctica/Rothera',
+    'Antarctica/Syowa',
+    'Antarctica/Troll',
+    'Antarctica/Vostok',
+    'Asia/Almaty',
+    'Asia/Amman',
+    'Asia/Anadyr',
+    'Asia/Aqtau',
+    'Asia/Aqtobe',
+    'Asia/Ashgabat',
+    'Asia/Atyrau',
+    'Asia/Baghdad',
+    'Asia/Bahrain',
+    'Asia/Baku',
+    'Asia/Bangkok',
+    'Asia/Barnaul',
+    'Asia/Beirut',
+    'Asia/Bishkek',
+    'Asia/Brunei',
+    'Asia/Chita',
+    'Asia/Choibalsan',
+    'Asia/Colombo',
+    'Asia/Damascus',
+    'Asia/Dhaka',
+    'Asia/Dili',
+    'Asia/Dubai',
+    'Asia/Dushanbe',
+    'Asia/Famagusta',
+    'Asia/Gaza',
+    'Asia/Hebron',
+    'Asia/Ho_Chi_Minh',
+    'Asia/Hong_Kong',
+    'Asia/Hovd',
+    'Asia/Irkutsk',
+    'Asia/Jakarta',
+    'Asia/Jayapura',
+    'Asia/Jerusalem',
+    'Asia/Kabul',
+    'Asia/Kamchatka',
+    'Asia/Karachi',
+    'Asia/Kathmandu',
+    'Asia/Khandyga',
+    'Asia/Kolkata',
+    'Asia/Krasnoyarsk',
+    'Asia/Kuala_Lumpur',
+    'Asia/Kuching',
+    'Asia/Kuwait',
+    'Asia/Macau',
+    'Asia/Magadan',
+    'Asia/Makassar',
+    'Asia/Manila',
+    'Asia/Muscat',
+    'Asia/Nicosia',
+    'Asia/Novokuznetsk',
+    'Asia/Novosibirsk',
+    'Asia/Omsk',
+    'Asia/Oral',
+    'Asia/Phnom_Penh',
+    'Asia/Pontianak',
+    'Asia/Pyongyang',
+    'Asia/Qatar',
+    'Asia/Qostanay',
+    'Asia/Qyzylorda',
+    'Asia/Riyadh',
+    'Asia/Sakhalin',
+    'Asia/Samarkand',
+    'Asia/Seoul',
+    'Asia/Shanghai',
+    'Asia/Singapore',
+    'Asia/Srednekolymsk',
+    'Asia/Taipei',
+    'Asia/Tashkent',
+    'Asia/Tbilisi',
+    'Asia/Tehran',
+    'Asia/Thimphu',
+    'Asia/Tokyo',
+    'Asia/Tomsk',
+    'Asia/Ulaanbaatar',
+    'Asia/Urumqi',
+    'Asia/Ust-Nera',
+    'Asia/Vientiane',
+    'Asia/Vladivostok',
+    'Asia/Yakutsk',
+    'Asia/Yangon',
+    'Asia/Yekaterinburg',
+    'Asia/Yerevan',
+    'Atlantic/Azores',
+    'Atlantic/Bermuda',
+    'Atlantic/Canary',
+    'Atlantic/Cape_Verde',
+    'Atlantic/Faroe',
+    'Atlantic/Madeira',
+    'Atlantic/Reykjavik',
+    'Atlantic/South_Georgia',
+    'Atlantic/St_Helena',
+    'Atlantic/Stanley',
+    'Australia/Adelaide',
+    'Australia/Brisbane',
+    'Australia/Broken_Hill',
+    'Australia/Currie',
+    'Australia/Darwin',
+    'Australia/Eucla',
+    'Australia/Hobart',
+    'Australia/Lindeman',
+    'Australia/Lord_Howe',
+    'Australia/Melbourne',
+    'Australia/Perth',
+    'Australia/Sydney',
+    'Europe/Amsterdam',
+    'Europe/Andorra',
+    'Europe/Astrakhan',
+    'Europe/Athens',
+    'Europe/Belgrade',
+    'Europe/Berlin',
+    'Europe/Bratislava',
+    'Europe/Brussels',
+    'Europe/Bucharest',
+    'Europe/Budapest',
+    'Europe/Busingen',
+    'Europe/Chisinau',
+    'Europe/Copenhagen',
+    'Europe/Dublin',
+    'Europe/Gibraltar',
+    'Europe/Guernsey',
+    'Europe/Helsinki',
+    'Europe/Isle_of_Man',
+    'Europe/Istanbul',
+    'Europe/Jersey',
+    'Europe/Kaliningrad',
+    'Europe/Kiev',
+    'Europe/Kirov',
+    'Europe/Lisbon',
+    'Europe/Ljubljana',
+    'Europe/London',
+    'Europe/Luxembourg',
+    'Europe/Madrid',
+    'Europe/Malta',
+    'Europe/Mariehamn',
+    'Europe/Minsk',
+    'Europe/Monaco',
+    'Europe/Moscow',
+    'Europe/Oslo',
+    'Europe/Paris',
+    'Europe/Podgorica',
+    'Europe/Prague',
+    'Europe/Riga',
+    'Europe/Rome',
+    'Europe/Samara',
+    'Europe/San_Marino',
+    'Europe/Sarajevo',
+    'Europe/Saratov',
+    'Europe/Simferopol',
+    'Europe/Skopje',
+    'Europe/Sofia',
+    'Europe/Stockholm',
+    'Europe/Tallinn',
+    'Europe/Tirane',
+    'Europe/Ulyanovsk',
+    'Europe/Uzhgorod',
+    'Europe/Vaduz',
+    'Europe/Vatican',
+    'Europe/Vienna',
+    'Europe/Vilnius',
+    'Europe/Volgograd',
+    'Europe/Warsaw',
+    'Europe/Zagreb',
+    'Europe/Zaporozhye',
+    'Europe/Zurich',
+    'Indian/Antananarivo',
+    'Indian/Chagos',
+    'Indian/Christmas',
+    'Indian/Cocos',
+    'Indian/Comoro',
+    'Indian/Kerguelen',
+    'Indian/Mahe',
+    'Indian/Maldives',
+    'Indian/Mauritius',
+    'Indian/Mayotte',
+    'Indian/Reunion',
+    'Pacific/Apia',
+    'Pacific/Auckland',
+    'Pacific/Bougainville',
+    'Pacific/Chatham',
+    'Pacific/Chuuk',
+    'Pacific/Easter',
+    'Pacific/Efate',
+    'Pacific/Enderbury',
+    'Pacific/Fakaofo',
+    'Pacific/Fiji',
+    'Pacific/Funafuti',
+    'Pacific/Galapagos',
+    'Pacific/Gambier',
+    'Pacific/Guadalcanal',
+    'Pacific/Guam',
+    'Pacific/Honolulu',
+    'Pacific/Kiritimati',
+    'Pacific/Kosrae',
+    'Pacific/Kwajalein',
+    'Pacific/Majuro',
+    'Pacific/Marquesas',
+    'Pacific/Midway',
+    'Pacific/Nauru',
+    'Pacific/Niue',
+    'Pacific/Norfolk',
+    'Pacific/Noumea',
+    'Pacific/Pago_Pago',
+    'Pacific/Palau',
+    'Pacific/Pitcairn',
+    'Pacific/Pohnpei',
+    'Pacific/Port_Moresby',
+    'Pacific/Rarotonga',
+    'Pacific/Saipan',
+    'Pacific/Tahiti',
+    'Pacific/Tarawa',
+    'Pacific/Tongatapu',
+    'Pacific/Wake',
+    'Pacific/Wallis',
+    'Etc/GMT',
+    'Etc/GMT+1',
+    'Etc/GMT+2',
+    'Etc/GMT+3',
+    'Etc/GMT+4',
+    'Etc/GMT+5',
+    'Etc/GMT+6',
+    'Etc/GMT+7',
+    'Etc/GMT+8',
+    'Etc/GMT+9',
+    'Etc/GMT+10',
+    'Etc/GMT+11',
+    'Etc/GMT+12',
+    'Etc/GMT-1',
+    'Etc/GMT-2',
+    'Etc/GMT-3',
+    'Etc/GMT-4',
+    'Etc/GMT-5',
+    'Etc/GMT-6',
+    'Etc/GMT-7',
+    'Etc/GMT-8',
+    'Etc/GMT-9',
+    'Etc/GMT-10',
+    'Etc/GMT-11',
+    'Etc/GMT-12',
+    'Etc/GMT-13',
+    'Etc/GMT-14',
+    'Etc/UTC',
+  ];
 
   @override
   void initState() {
     super.initState();
-    _rulesController.text = _defaultRules(); // Set default rules
+    _rulesController.text = _defaultRules();
     _initializeAnimations();
     _initLocationServices();
+    tz.initializeTimeZones();
   }
 
   String _defaultRules() {
@@ -89,6 +585,220 @@ class _CreateTournamentPageState extends State<CreateTournamentPage> with Single
 4. Tournament director reserves the right to modify rules as needed
 5. Any disputes will be resolved by the tournament committee
 ''';
+  }
+
+  Future<void> _validateCityWithGeocoding(String city) async {
+    if (city.isEmpty) {
+      setState(() {
+        _isCityValid = false;
+        _selectedTimezone = 'UTC';
+      });
+      return;
+    }
+
+    setState(() {
+      _isValidatingCity = true;
+    });
+
+    final timezone = _getTimezoneForCity(city);
+    try {
+      tz.getLocation(timezone);
+      setState(() {
+        _isCityValid = true;
+        _selectedTimezone = timezone;
+        _isValidatingCity = false;
+      });
+    } catch (e) {
+      try {
+        final locations = await locationFromAddress(city);
+        if (locations.isEmpty) {
+          throw Exception('No location found');
+        }
+
+        final place = locations.first;
+        final placemarks = await placemarkFromCoordinates(place.latitude, place.longitude);
+        final countryCode = placemarks.first.isoCountryCode?.toLowerCase();
+        final timezone = _getCountryTimezone(countryCode) ?? 'UTC';
+
+        try {
+          tz.getLocation(timezone);
+          setState(() {
+            _isCityValid = true;
+            _selectedTimezone = timezone;
+            _isValidatingCity = false;
+          });
+        } catch (e) {
+          setState(() {
+            _isCityValid = false;
+            _selectedTimezone = 'UTC';
+            _isValidatingCity = false;
+          });
+        }
+      } catch (e) {
+        setState(() {
+          _isCityValid = false;
+          _selectedTimezone = 'UTC';
+          _isValidatingCity = false;
+        });
+      }
+    }
+  }
+
+  String? _getCountryTimezone(String? countryCode) {
+    const countryTimezones = {
+      'in': 'Asia/Kolkata',
+      'au': 'Australia/Sydney',
+      'gb': 'Europe/London',
+      'us': 'America/Los_Angeles',
+      'jp': 'Asia/Tokyo',
+      'cn': 'Asia/Shanghai',
+      'sg': 'Asia/Singapore',
+      'ae': 'Asia/Dubai',
+      'ru': 'Europe/Moscow',
+      'fr': 'Europe/Paris',
+      'de': 'Europe/Berlin',
+    };
+    return countryCode != null ? countryTimezones[countryCode.toLowerCase()] : null;
+  }
+
+  String _getTimezoneForCity(String city) {
+    final cityLower = city.toLowerCase().trim();
+    if (_cityToTimezone.containsKey(cityLower)) {
+      return _cityToTimezone[cityLower]!;
+    }
+    if (cityLower.contains('california') || 
+        cityLower.contains('san francisco') || 
+        cityLower.contains('los angeles') ||
+        cityLower.contains('san diego')) {
+      return 'America/Los_Angeles';
+    }
+    if (cityLower.contains('texas') || 
+        cityLower.contains('houston') || 
+        cityLower.contains('dallas') ||
+        cityLower.contains('austin')) {
+      return 'America/Chicago';
+    }
+    if (cityLower.contains('new york')) {
+      return 'America/New_York';
+    }
+    final countryTimezone = _getCountryTimezone(cityLower);
+    return countryTimezone ?? 'UTC';
+  }
+
+  Future<void> _selectDate(BuildContext context) async {
+    final timeZone = tz.getLocation(_selectedTimezone);
+    final now = tz.TZDateTime.now(timeZone);
+
+    final DateTime? picked = await showDatePicker(
+      context: context,
+      initialDate: now,
+      firstDate: now,
+      lastDate: now.add(const Duration(days: 365 * 2)),
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: ColorScheme.light(
+              primary: accentColor,
+              onPrimary: Colors.white,
+              surface: secondaryColor,
+              onSurface: textPrimary,
+            ),
+            textButtonTheme: TextButtonThemeData(
+              style: TextButton.styleFrom(foregroundColor: accentColor),
+            ),
+          ),
+          child: child!,
+        );
+      },
+    );
+
+    if (picked != null && mounted) {
+      setState(() {
+        _selectedDate = tz.TZDateTime(
+          timeZone,
+          picked.year,
+          picked.month,
+          picked.day,
+        );
+      });
+      debugPrint('Selected start date: $_selectedDate');
+      await _selectTime(context);
+    }
+  }
+
+  Future<void> _selectTime(BuildContext context) async {
+    final timeZone = tz.getLocation(_selectedTimezone);
+    final now = tz.TZDateTime.now(timeZone);
+
+    final TimeOfDay? picked = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(now),
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: ColorScheme.light(
+              primary: accentColor,
+              onPrimary: Colors.white,
+              surface: secondaryColor,
+              onSurface: textPrimary,
+            ),
+            textButtonTheme: TextButtonThemeData(
+              style: TextButton.styleFrom(foregroundColor: accentColor),
+            ),
+          ),
+          child: child!,
+        );
+      },
+    );
+
+    if (picked != null && mounted) {
+      setState(() {
+        _selectedTime = picked;
+      });
+      debugPrint('Selected start time: $_selectedTime');
+    }
+  }
+
+  Future<void> _selectEndDate(BuildContext context) async {
+    debugPrint('Opening end date picker');
+    final timeZone = tz.getLocation(_selectedTimezone);
+    final initialDate = _selectedDate ?? tz.TZDateTime.now(timeZone);
+
+    final DateTime? picked = await showDatePicker(
+      context: context,
+      initialDate: initialDate,
+      firstDate: initialDate,
+      lastDate: tz.TZDateTime.now(timeZone).add(const Duration(days: 365 * 2)),
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: ColorScheme.light(
+              primary: accentColor,
+              onPrimary: Colors.white,
+              surface: secondaryColor,
+              onSurface: textPrimary,
+            ),
+            dialogBackgroundColor: secondaryColor,
+            textButtonTheme: TextButtonThemeData(
+              style: TextButton.styleFrom(foregroundColor: accentColor),
+            ),
+          ),
+          child: child!,
+        );
+      },
+    );
+
+    if (picked != null && mounted) {
+      setState(() {
+        _selectedEndDate = tz.TZDateTime(
+          timeZone,
+          picked.year,
+          picked.month,
+          picked.day,
+        );
+      });
+      debugPrint('Selected end date: $_selectedEndDate');
+    }
   }
 
   void _initializeAnimations() {
@@ -173,12 +883,25 @@ class _CreateTournamentPageState extends State<CreateTournamentPage> with Single
         debugPrint('Fetched city: $city');
 
         if (city != null && city.isNotEmpty) {
-          setState(() {
-            _fetchedCity = _validCities[city.toLowerCase()] ?? city;
-            _cityController.text = _fetchedCity!;
-            _isCityValid = true;
-          });
-          _validateCityWithGeocoding(_fetchedCity!);
+          final cityLower = city.toLowerCase();
+          String timezoneName = _getTimezoneForCity(cityLower);
+          try {
+            tz.getLocation(timezoneName);
+            setState(() {
+              _fetchedCity = city;
+              _isCityValid = true;
+              _selectedTimezone = timezoneName;
+            });
+            debugPrint('Set city to $city with timezone $timezoneName');
+          } catch (e) {
+            debugPrint('Invalid timezone from location: $timezoneName, defaulting to UTC');
+            setState(() {
+              _fetchedCity = city;
+              _isCityValid = true;
+              _selectedTimezone = 'UTC';
+            });
+            _showErrorToast('Timezone Error', 'Could not determine timezone for $city, defaulting to UTC');
+          }
         } else {
           _showErrorToast('Location Error', 'Unable to determine city from location');
         }
@@ -200,114 +923,6 @@ class _CreateTournamentPageState extends State<CreateTournamentPage> with Single
     }
   }
 
-  Future<void> _validateCityWithGeocoding(String city) async {
-    if (city.trim().isEmpty) {
-      if (mounted) {
-        setState(() {
-          _isCityValid = false;
-          _isValidatingCity = false;
-          _cityController.clear();
-        });
-      }
-      _showErrorToast('Invalid City', 'City cannot be empty');
-      return;
-    }
-
-    if (mounted) {
-      setState(() {
-        _isValidatingCity = true;
-      });
-    }
-
-    final normalizedCity = city.trim();
-    final normalizedLower = normalizedCity.toLowerCase();
-
-    // Check hardcoded valid cities
-    if (_validCities.containsKey(normalizedLower)) {
-      if (mounted) {
-        setState(() {
-          _cityController.text = _validCities[normalizedLower]!;
-          _isCityValid = true;
-          _isValidatingCity = false;
-        });
-      }
-      debugPrint('City matched in validCities: ${_validCities[normalizedLower]}');
-      return;
-    }
-
-    try {
-      debugPrint('Geocoding: $normalizedCity, India');
-      List<Location> locations = await locationFromAddress('$normalizedCity, India');
-      debugPrint('Locations found: ${locations.length}');
-
-      if (locations.isNotEmpty) {
-        List<Placemark> placemarks = await placemarkFromCoordinates(
-          locations.first.latitude,
-          locations.first.longitude,
-        );
-        debugPrint('Placemarks: ${placemarks.map((p) => {
-              'locality': p.locality,
-              'name': p.name,
-              'adminArea': p.administrativeArea,
-              'subLocality': p.subLocality,
-              'subAdminArea': p.subAdministrativeArea
-            }).toList()}');
-
-        if (placemarks.isNotEmpty) {
-          final place = placemarks.first;
-          final fields = [
-            place.locality?.toLowerCase(),
-            place.name?.toLowerCase(),
-            place.administrativeArea?.toLowerCase(),
-            place.subLocality?.toLowerCase(),
-            place.subAdministrativeArea?.toLowerCase(),
-          ].where((f) => f != null && f.contains(normalizedLower)).toList();
-
-          if (fields.isNotEmpty) {
-            if (mounted) {
-              setState(() {
-                _cityController.text = place.locality ?? normalizedCity;
-                _isCityValid = true;
-                _isValidatingCity = false;
-              });
-            }
-            debugPrint('City validated: $normalizedCity (matched in $fields)');
-            return;
-          }
-        }
-      }
-
-      if (mounted) {
-        setState(() {
-          _isCityValid = false;
-          _isValidatingCity = false;
-          _cityController.clear();
-        });
-        _showErrorToast('Invalid City', 'No matching city found for "$normalizedCity"');
-      }
-    } catch (e, stackTrace) {
-      debugPrint('Geocoding error: $e\n$stackTrace');
-      if (_validCities.containsKey(normalizedLower)) {
-        if (mounted) {
-          setState(() {
-            _cityController.text = _validCities[normalizedLower]!;
-            _isCityValid = true;
-            _isValidatingCity = false;
-          });
-        }
-      } else {
-        if (mounted) {
-          setState(() {
-            _isCityValid = false;
-            _isValidatingCity = false;
-            _cityController.clear();
-          });
-          _showErrorToast('Invalid City', 'Geocoding failed for "$normalizedCity"');
-        }
-      }
-    }
-  }
-
   void _debounceCityValidation(String value) {
     _debounceTimer?.cancel();
     _debounceTimer = Timer(const Duration(milliseconds: 2000), () {
@@ -315,217 +930,135 @@ class _CreateTournamentPageState extends State<CreateTournamentPage> with Single
     });
   }
 
-  Future<void> _selectDate(BuildContext context) async {
-    debugPrint('Opening date picker');
-    final DateTime? picked = await showDatePicker(
-      context: context,
-      initialDate: DateTime.now(),
-      firstDate: DateTime.now(),
-      lastDate: DateTime.now().add(const Duration(days: 365 * 2)),
-      builder: (context, child) {
-        return Theme(
-          data: Theme.of(context).copyWith(
-            colorScheme: ColorScheme.light(
-              primary: accentColor,
-              onPrimary: Colors.white,
-              surface: secondaryColor,
-              onSurface: textPrimary,
-            ),
-            dialogBackgroundColor: secondaryColor,
-            textButtonTheme: TextButtonThemeData(
-              style: TextButton.styleFrom(foregroundColor: accentColor),
-            ),
-          ),
-          child: child!,
-        );
-      },
+  Future<void> _createTournament() async {
+    debugPrint('Starting tournament creation');
+    if (!_formKey.currentState!.validate()) {
+      debugPrint('Form validation failed');
+      return;
+    }
+
+    // Validate required date/time fields
+    if (_selectedDate == null || _selectedTime == null) {
+      debugPrint('Start date or time missing');
+      _showErrorToast('Start Date & Time Required', 'Please select a start date and time');
+      return;
+    }
+
+    if (_selectedEndDate == null) {
+      debugPrint('End date missing');
+      _showErrorToast('End Date Required', 'Please select an end date');
+      return;
+    }
+
+    if (!_isCityValid) {
+      debugPrint('Invalid city');
+      _showErrorToast('Invalid City', 'Please enter a valid city');
+      return;
+    }
+
+    // Get the selected timezone
+    final timeZone = tz.getLocation(_selectedTimezone);
+
+    // Combine date and time in the selected timezone
+    final startDateTimeLocal = tz.TZDateTime(
+      timeZone,
+      _selectedDate!.year,
+      _selectedDate!.month,
+      _selectedDate!.day,
+      _selectedTime!.hour,
+      _selectedTime!.minute,
     );
 
-    if (picked != null) {
-      await _selectTime(context);
+    // Convert to UTC for storage
+    final startDateTimeUTC = startDateTimeLocal.toUtc();
+
+    // Create end date at end of day in local timezone
+    final endDateLocal = tz.TZDateTime(
+      timeZone,
+      _selectedEndDate!.year,
+      _selectedEndDate!.month,
+      _selectedEndDate!.day,
+      23, 59, 59,
+    );
+
+    // Convert to UTC for storage
+    final endDateUTC = endDateLocal.toUtc();
+
+    // Validate date ranges
+    if (endDateUTC.isBefore(startDateTimeUTC)) {
+      debugPrint('Invalid date range: endDate $endDateUTC before startDateTime $startDateTimeUTC');
+      _showErrorToast('Invalid Date Range', 'End date must be on or after start date');
+      return;
+    }
+
+    if (mounted) {
+      setState(() {
+        _isLoading = true;
+      });
+    }
+
+    try {
+      debugPrint('Creating tournament document');
+      final tournamentRef = FirebaseFirestore.instance.collection('tournaments').doc();
+
+      final newTournament = Tournament(
+        id: tournamentRef.id,
+        name: _nameController.text.trim(),
+        venue: _venueController.text.trim(),
+        city: _cityController.text.trim(),
+        startDate: startDateTimeUTC,
+        endDate: endDateUTC,
+        entryFee: double.tryParse(_entryFeeController.text.trim()) ?? 0.0,
+        status: 'open',
+        createdBy: widget.userId,
+        createdAt: DateTime.now().toUtc(),
+        participants: [],
+        rules: _rulesController.text.trim().isNotEmpty ? _rulesController.text.trim() : null,
+        maxParticipants: int.tryParse(_maxParticipantsController.text.trim()) ?? 1,
+        gameFormat: _playStyle,
+        gameType: _eventType,
+        bringOwnEquipment: _bringOwnEquipment,
+        costShared: _costShared,
+        profileImage: null,
+        timezone: _selectedTimezone,
+      );
+
+      final tournamentData = newTournament.toFirestore();
+      debugPrint('Tournament data: $tournamentData');
+
+      // Final validation
+      if (newTournament.name.isEmpty || newTournament.venue.isEmpty || newTournament.city.isEmpty) {
+        throw Exception('Required fields are empty');
+      }
+
+      await tournamentRef.set(tournamentData);
+      debugPrint('Tournament created successfully: ${newTournament.id}');
+
+      _showSuccessToast(
+        'Event Created',
+        '"${newTournament.name}" has been successfully created',
+      );
+
+      await Future.delayed(const Duration(milliseconds: 1500));
+
+      if (mounted) {
+        widget.onTournamentCreated?.call();
+      }
+    } on FirebaseException catch (e, stackTrace) {
+      debugPrint('Firestore error: ${e.code} - ${e.message}\n$stackTrace');
+      _showErrorToast('Creation Failed', 'Firestore error: ${e.message}');
+    } catch (e, stackTrace) {
+      debugPrint('Tournament creation failed: $e\n$stackTrace');
+      _showErrorToast('Creation Failed', 'Failed to create event: ${e.toString()}');
+    } finally {
       if (mounted) {
         setState(() {
-          _selectedDate = picked;
+          _isLoading = false;
         });
       }
-      debugPrint('Selected date: $picked');
     }
   }
 
-  Future<void> _selectEndDate(BuildContext context) async {
-    debugPrint('Opening end date picker');
-    final DateTime? picked = await showDatePicker(
-      context: context,
-      initialDate: _selectedDate ?? DateTime.now(),
-      firstDate: _selectedDate ?? DateTime.now(),
-      lastDate: DateTime.now().add(const Duration(days: 365 * 2)),
-      builder: (context, child) {
-        return Theme(
-          data: Theme.of(context).copyWith(
-            colorScheme: ColorScheme.light(
-              primary: accentColor,
-              onPrimary: Colors.white,
-              surface: secondaryColor,
-              onSurface: textPrimary,
-            ),
-            dialogBackgroundColor: secondaryColor,
-            textButtonTheme: TextButtonThemeData(
-              style: TextButton.styleFrom(foregroundColor: accentColor),
-            ),
-          ),
-          child: child!,
-        );
-      },
-    );
-
-    if (picked != null && mounted) {
-      setState(() {
-        _selectedEndDate = picked;
-      });
-      debugPrint('Selected end date: $picked');
-    }
-  }
-
-  Future<void> _selectTime(BuildContext context) async {
-    debugPrint('Opening time picker');
-    final TimeOfDay? picked = await showTimePicker(
-      context: context,
-      initialTime: TimeOfDay.now(),
-      builder: (context, child) {
-        return Theme(
-          data: Theme.of(context).copyWith(
-            colorScheme: ColorScheme.light(
-              primary: accentColor,
-              onPrimary: Colors.white,
-              surface: secondaryColor,
-              onSurface: textPrimary,
-            ),
-            dialogBackgroundColor: secondaryColor,
-            textButtonTheme: TextButtonThemeData(
-              style: TextButton.styleFrom(foregroundColor: accentColor),
-            ),
-          ),
-          child: child!,
-        );
-      },
-    );
-
-    if (picked != null && mounted) {
-      setState(() {
-        _selectedTime = picked;
-      });
-      debugPrint('Selected time: $picked');
-    }
-  }
-
-  Future<void> _createTournament() async {
-  debugPrint('Starting tournament creation');
-  if (!_formKey.currentState!.validate()) {
-    debugPrint('Form validation failed');
-    return;
-  }
-  if (_selectedDate == null || _selectedTime == null) {
-    debugPrint('Start date or time missing');
-    _showErrorToast('Start Date & Time Required', 'Please select a start date and time');
-    return;
-  }
-  if (_selectedEndDate == null) {
-    debugPrint('End date missing');
-    _showErrorToast('End Date Required', 'Please select an end date');
-    return;
-  }
-  if (!_isCityValid) {
-    debugPrint('Invalid city');
-    _showErrorToast('Invalid City', 'Please enter a valid Indian city');
-    return;
-  }
-
-  final startDateTime = DateTime(
-    _selectedDate!.year,
-    _selectedDate!.month,
-    _selectedDate!.day,
-    _selectedTime!.hour,
-    _selectedTime!.minute,
-  );
-
-  final endDate = DateTime(
-    _selectedEndDate!.year,
-    _selectedEndDate!.month,
-    _selectedEndDate!.day,
-  );
-
-  if (endDate.isBefore(startDateTime)) {
-    debugPrint('Invalid date range: endDate $endDate before startDateTime $startDateTime');
-    _showErrorToast('Invalid Date Range', 'End date must be on or after start date');
-    return;
-  }
-
-  if (mounted) {
-    setState(() {
-      _isLoading = true;
-    });
-  }
-
-  try {
-    debugPrint('Creating tournament document');
-    final tournamentRef = FirebaseFirestore.instance.collection('tournaments').doc();
-    final newTournament = Tournament(
-      id: tournamentRef.id,
-      name: _nameController.text.trim(),
-      venue: _venueController.text.trim(),
-      city: _cityController.text.trim(),
-      startDate: _selectedDate!,
-      startTime: _selectedTime!,
-      endDate: endDate,
-      entryFee: double.tryParse(_entryFeeController.text.trim()) ?? 0.0,
-      status: 'open',
-      createdBy: widget.userId,
-      createdAt: DateTime.now(),
-      participants: [],
-      rules: _rulesController.text.trim().isNotEmpty ? _rulesController.text.trim() : null,
-      maxParticipants: int.tryParse(_maxParticipantsController.text.trim()) ?? 1,
-      gameFormat: _playStyle,
-      gameType: _eventType,
-      bringOwnEquipment: _bringOwnEquipment,
-      costShared: _costShared,
-      profileImage: null, // Explicitly set to null as it's optional
-    );
-
-    final tournamentData = newTournament.toFirestore();
-    debugPrint('Tournament data: $tournamentData');
-
-    // Validate only required fields
-    if (newTournament.name.isEmpty || newTournament.venue.isEmpty || newTournament.city.isEmpty) {
-      throw Exception('Required fields are empty');
-    }
-
-    await tournamentRef.set(tournamentData);
-    debugPrint('Tournament created successfully: ${newTournament.id}');
-
-    _showSuccessToast(
-      'Event Created',
-      '"${newTournament.name}" has been successfully created',
-    );
-
-    await Future.delayed(const Duration(milliseconds: 1500));
-
-    if (mounted) {
-      widget.onTournamentCreated?.call();
-    }
-  } on FirebaseException catch (e, stackTrace) {
-    debugPrint('Firestore error: ${e.code} - ${e.message}\n$stackTrace');
-    _showErrorToast('Creation Failed', 'Firestore error: ${e.message}');
-  } catch (e, stackTrace) {
-    debugPrint('Tournament creation failed: $e\n$stackTrace');
-    _showErrorToast('Creation Failed', 'Failed to create event: ${e.toString()}');
-  } finally {
-    if (mounted) {
-      setState(() {
-        _isLoading = false;
-      });
-    }
-  }
-}
   void _showSuccessToast(String title, String message) {
     debugPrint('Showing success toast: $title - $message');
     toastification.show(
@@ -560,10 +1093,6 @@ class _CreateTournamentPageState extends State<CreateTournamentPage> with Single
     if (value == null || value.trim().isEmpty) {
       debugPrint('City validation failed: empty');
       return 'Enter a city';
-    }
-    if (!_isCityValid) {
-      debugPrint('City validation failed: invalid');
-      return 'Enter a valid Indian city';
     }
     return null;
   }
@@ -638,7 +1167,7 @@ class _CreateTournamentPageState extends State<CreateTournamentPage> with Single
                             items: [
                               'Knockout',
                               'Round-Robin',
-                             'Double Elimination',
+                              'Double Elimination',
                               'Group + Knockout',
                               'Team Format',
                               'Ladder',
@@ -666,6 +1195,8 @@ class _CreateTournamentPageState extends State<CreateTournamentPage> with Single
                           ),
                           const SizedBox(height: 16),
                           _buildCityFieldWithLocation(),
+                          const SizedBox(height: 16),
+                          _buildTimezoneSelector(),
                           const SizedBox(height: 24),
                           _buildSectionHeader('Date & Time'),
                           const SizedBox(height: 12),
@@ -678,9 +1209,9 @@ class _CreateTournamentPageState extends State<CreateTournamentPage> with Single
                               Expanded(
                                 child: _buildTextField(
                                   controller: _entryFeeController,
-                                  label: 'Entry Fee (₹)',
+                                  label: 'Entry Fee (\$)',
                                   hintText: '0 for free entry',
-                                  icon: Icons.currency_rupee,
+                                  icon: Icons.attach_money,
                                   keyboardType: TextInputType.number,
                                   validator: (value) {
                                     if (value == null || value.trim().isEmpty) {
@@ -870,6 +1401,147 @@ class _CreateTournamentPageState extends State<CreateTournamentPage> with Single
     );
   }
 
+  Widget _buildTimezoneSelector() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Timezone',
+          style: GoogleFonts.poppins(
+            color: textSecondary,
+            fontSize: 14,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        const SizedBox(height: 8),
+        GestureDetector(
+          onTap: () => _showTimezoneDialog(context),
+          child: Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              color: secondaryColor,
+              border: Border.all(color: borderColor, width: 1),
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    _selectedTimezone == 'Asia/Kolkata'
+                        ? 'IST ($_selectedTimezone)'
+                        : _selectedTimezone,
+                    style: GoogleFonts.poppins(
+                      color: textPrimary,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+                Icon(Icons.arrow_drop_down, color: accentColor),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _showTimezoneDialog(BuildContext context) async {
+    String searchQuery = '';
+    final controller = TextEditingController();
+
+    await showDialog(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            final filteredTimezones = _allTimezones
+                .where((timezone) => timezone.toLowerCase().contains(searchQuery.toLowerCase()))
+                .toList();
+
+            return AlertDialog(
+              backgroundColor: secondaryColor,
+              title: Text(
+                'Select Timezone',
+                style: GoogleFonts.poppins(
+                  color: textPrimary,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              content: SizedBox(
+                width: double.maxFinite,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: controller,
+                      decoration: InputDecoration(
+                        hintText: 'Search timezones...',
+                        hintStyle: GoogleFonts.poppins(color: textSecondary),
+                        prefixIcon: Icon(Icons.search, color: accentColor),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                          borderSide: BorderSide(color: borderColor),
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                          borderSide: BorderSide(color: borderColor),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                          borderSide: BorderSide(color: accentColor),
+                        ),
+                      ),
+                      onChanged: (value) {
+                        setDialogState(() {
+                          searchQuery = value;
+                        });
+                      },
+                    ),
+                    const SizedBox(height: 16),
+                    SizedBox(
+                      height: 300,
+                      child: ListView.builder(
+                        itemCount: filteredTimezones.length,
+                        itemBuilder: (context, index) {
+                          final timezone = filteredTimezones[index];
+                          return ListTile(
+                            title: Text(
+                              timezone == 'Asia/Kolkata' ? 'IST ($timezone)' : timezone,
+                              style: GoogleFonts.poppins(
+                                color: textPrimary,
+                                fontSize: 15,
+                              ),
+                            ),
+                            onTap: () {
+                              setState(() {
+                                _selectedTimezone = timezone;
+                              });
+                              Navigator.pop(context);
+                            },
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: Text(
+                    'Cancel',
+                    style: GoogleFonts.poppins(color: accentColor),
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
   Widget _buildPlayStyleSelector() {
     const options = [
       "Men's Singles",
@@ -994,6 +1666,13 @@ class _CreateTournamentPageState extends State<CreateTournamentPage> with Single
   }
 
   Widget _buildDateTimeSelector() {
+    final timeZone = tz.getLocation(_selectedTimezone);
+    final startDateLocal = _selectedDate != null ? tz.TZDateTime.from(_selectedDate!, timeZone) : null;
+    final startTime = _selectedTime ?? (startDateLocal != null
+        ? TimeOfDay(hour: startDateLocal.hour, minute: startDateLocal.minute)
+        : null);
+    final endDateLocal = _selectedEndDate != null ? tz.TZDateTime.from(_selectedEndDate!, timeZone) : null;
+
     return Column(
       children: [
         Row(
@@ -1014,11 +1693,11 @@ class _CreateTournamentPageState extends State<CreateTournamentPage> with Single
                       Icon(Icons.calendar_today, color: accentColor, size: 20),
                       const SizedBox(width: 12),
                       Text(
-                        _selectedDate == null
+                        startDateLocal == null
                             ? 'Start Date'
-                            : DateFormat('MMM dd, yyyy').format(_selectedDate!),
+                            : DateFormat('MMM dd, yyyy').format(startDateLocal),
                         style: GoogleFonts.poppins(
-                          color: _selectedDate == null ? textSecondary : textPrimary,
+                          color: startDateLocal == null ? textSecondary : textPrimary,
                           fontSize: 15,
                           fontWeight: FontWeight.w500,
                         ),
@@ -1045,9 +1724,9 @@ class _CreateTournamentPageState extends State<CreateTournamentPage> with Single
                       Icon(Icons.access_time, color: accentColor, size: 20),
                       const SizedBox(width: 12),
                       Text(
-                        _selectedTime == null ? 'Start Time' : _selectedTime!.format(context),
+                        startTime == null ? 'Start Time' : startTime.format(context),
                         style: GoogleFonts.poppins(
-                          color: _selectedTime == null ? textSecondary : textPrimary,
+                          color: startTime == null ? textSecondary : textPrimary,
                           fontSize: 15,
                           fontWeight: FontWeight.w500,
                         ),
@@ -1078,11 +1757,11 @@ class _CreateTournamentPageState extends State<CreateTournamentPage> with Single
                       Icon(Icons.calendar_today, color: accentColor, size: 20),
                       const SizedBox(width: 12),
                       Text(
-                        _selectedEndDate == null
+                        endDateLocal == null
                             ? 'End Date'
-                            : DateFormat('MMM dd, yyyy').format(_selectedEndDate!),
+                            : DateFormat('MMM dd, yyyy').format(endDateLocal),
                         style: GoogleFonts.poppins(
-                          color: _selectedEndDate == null ? textSecondary : textPrimary,
+                          color: endDateLocal == null ? textSecondary : textPrimary,
                           fontSize: 15,
                           fontWeight: FontWeight.w500,
                         ),
@@ -1095,6 +1774,18 @@ class _CreateTournamentPageState extends State<CreateTournamentPage> with Single
             const Expanded(child: SizedBox()),
           ],
         ),
+        if (_selectedDate != null && _selectedTime != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text(
+              'Time in ${_selectedTimezone == 'Asia/Kolkata' ? 'IST' : _selectedTimezone}',
+              style: GoogleFonts.poppins(
+                color: textSecondary,
+                fontSize: 12,
+                fontWeight: FontWeight.w400,
+              ),
+            ),
+          ),
       ],
     );
   }
@@ -1111,7 +1802,7 @@ class _CreateTournamentPageState extends State<CreateTournamentPage> with Single
             fontWeight: FontWeight.w600,
           ),
         ),
-        initiallyExpanded: true, // Encourage users to see default rules
+        initiallyExpanded: true,
         collapsedBackgroundColor: Colors.transparent,
         backgroundColor: Colors.transparent,
         iconColor: accentColor,

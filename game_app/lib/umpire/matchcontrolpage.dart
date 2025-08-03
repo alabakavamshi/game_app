@@ -6,6 +6,8 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 import 'package:toastification/toastification.dart';
 import 'package:badges/badges.dart' as badges;
+import 'package:timezone/timezone.dart' as tz;
+import 'package:timezone/data/latest.dart' as tz;
 
 class MatchControlPage extends StatefulWidget {
   final String tournamentId;
@@ -40,14 +42,16 @@ class _MatchControlPageState extends State<MatchControlPage>
   late AnimationController _animationController;
   late Animation<double> _scaleAnimation;
   late Animation<double> _fadeAnimation;
-  Timestamp? _matchStartTime;
+  tz.TZDateTime? _matchStartTime;
   String? _countdown;
   Timer? _countdownTimer;
   bool _canStartMatch = false;
+  String? _tournamentTimezone;
 
   @override
   void initState() {
     super.initState();
+    tz.initializeTimeZones();
     _match = Map.from(widget.match);
     _initializeMatchStartTime().then((_) {
       _lastTeam1Score = _getCurrentScore(true);
@@ -71,8 +75,17 @@ class _MatchControlPageState extends State<MatchControlPage>
 
   Future<void> _initializeMatchStartTime() async {
     if (_match['startTime'] != null) {
+      final startTime = (_match['startTime'] as Timestamp).toDate();
+      final tournamentDoc = await FirebaseFirestore.instance
+          .collection('tournaments')
+          .doc(widget.tournamentId)
+          .get();
+      final data = tournamentDoc.data();
+      final timezoneName = data?['timezone'] as String? ?? 'UTC';
+      final timezone = tz.getLocation(timezoneName);
       setState(() {
-        _matchStartTime = _match['startTime'] as Timestamp;
+        _matchStartTime = tz.TZDateTime.from(startTime, timezone);
+        _tournamentTimezone = timezoneName;
       });
       return;
     }
@@ -83,23 +96,28 @@ class _MatchControlPageState extends State<MatchControlPage>
     final data = tournamentDoc.data();
     final startDate = data?['startDate'] as Timestamp?;
     final startTimeData = data?['startTime'] as Map<String, dynamic>?;
+    final timezoneName = data?['timezone'] as String? ?? 'UTC';
+    final timezone = tz.getLocation(timezoneName);
     if (startDate != null && startTimeData != null) {
+      final startDateTime = tz.TZDateTime.from(startDate.toDate(), timezone);
       final hour = startTimeData['hour'] as int? ?? 0;
       final minute = startTimeData['minute'] as int? ?? 0;
-      final startDateTime = DateTime(
-        startDate.toDate().year,
-        startDate.toDate().month,
-        startDate.toDate().day,
-        hour,
-        minute,
-      ).toUtc();
       setState(() {
-        _matchStartTime = Timestamp.fromDate(startDateTime);
+        _matchStartTime = tz.TZDateTime(
+          timezone,
+          startDateTime.year,
+          startDateTime.month,
+          startDateTime.day,
+          hour,
+          minute,
+        );
+        _tournamentTimezone = timezoneName;
       });
     } else {
-      final now = DateTime.now().toUtc().add(const Duration(hours: 5, minutes: 30));
+      final now = tz.TZDateTime.now(timezone).add(const Duration(minutes: 5));
       setState(() {
-        _matchStartTime = Timestamp.fromDate(now.add(const Duration(minutes: 5)));
+        _matchStartTime = now;
+        _tournamentTimezone = timezoneName;
       });
     }
   }
@@ -111,58 +129,56 @@ class _MatchControlPageState extends State<MatchControlPage>
     super.dispose();
   }
 
-  void _startCountdown() {
-    if (_match['liveScores']?['isLive'] == true || _match['completed'] == true) {
-      setState(() {
-        _countdown = null;
-      });
-      _countdownTimer?.cancel();
-      return;
-    }
-    if (_matchStartTime == null) {
-      setState(() {
-        _countdown = 'Start time not scheduled';
-      });
-      _countdownTimer?.cancel();
-      return;
-    }
+ void _startCountdown() {
+  if (_match['liveScores']?['isLive'] == true || _match['completed'] == true) {
     setState(() {
       _countdown = null;
     });
     _countdownTimer?.cancel();
-    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (!mounted) {
-        timer.cancel();
-        return;
-      }
-      final now = DateTime.now().toUtc().add(const Duration(hours: 5, minutes: 30));
-      final startTime = _matchStartTime!.toDate().toUtc().add(const Duration(hours: 5, minutes: 30));
-      final difference = startTime.difference(now);
-      if (difference.isNegative) {
-        setState(() {
-          _countdown = 'Match should have started';
-          _canStartMatch = true;
-        });
-        timer.cancel();
-      } else if (difference.inHours >= 24) {
-        final days = difference.inDays;
-        final hours = difference.inHours % 24;
-        setState(() {
-          _countdown = '${days}d ${hours}h';
-          _canStartMatch = false;
-        });
-      } else {
-        final hours = difference.inHours;
-        final minutes = difference.inMinutes % 60;
-        final seconds = difference.inSeconds % 60;
-        setState(() {
-          _countdown = '${hours}h ${minutes}m ${seconds}s';
-          _canStartMatch = false;
-        });
-      }
-    });
+    return;
   }
-
+  if (_matchStartTime == null || _tournamentTimezone == null) {
+    setState(() {
+      _countdown = 'Start time not scheduled';
+    });
+    _countdownTimer?.cancel();
+    return;
+  }
+  setState(() {
+    _countdown = null;
+  });
+  _countdownTimer?.cancel();
+  _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+    if (!mounted) {
+      timer.cancel();
+      return;
+    }
+    final now = tz.TZDateTime.now(tz.getLocation(_tournamentTimezone!));
+    final difference = _matchStartTime!.difference(now);
+    if (difference.isNegative) {
+      setState(() {
+        _countdown = 'Match should have started';
+        _canStartMatch = true;
+      });
+      timer.cancel();
+    } else if (difference.inHours >= 24) {
+      final days = difference.inDays;
+      final hours = (difference.inHours % 24) + (difference.inMinutes % 60 >= 30 ? 1 : 0); // Round up if minutes >= 30
+      setState(() {
+        _countdown = '${days}d ${hours}h';
+        _canStartMatch = false;
+      });
+    } else {
+      final hours = difference.inHours;
+      final minutes = difference.inMinutes % 60;
+      final seconds = difference.inSeconds % 60;
+      setState(() {
+        _countdown = '${hours}h ${minutes}m ${seconds}s';
+        _canStartMatch = false;
+      });
+    }
+  });
+}
   int _getCurrentScore(bool isTeam1) {
     final liveScores = _match['liveScores'] ?? {};
     final currentGame = liveScores['currentGame'] ?? 1;
@@ -216,11 +232,15 @@ class _MatchControlPageState extends State<MatchControlPage>
               if (matches.length > widget.matchIndex) {
                 final newMatch = matches[widget.matchIndex];
                 final newStartTime = newMatch['startTime'] as Timestamp?;
-                if (newStartTime != null && newStartTime != _matchStartTime) {
-                  setState(() {
-                    _matchStartTime = newStartTime;
-                  });
-                  _startCountdown();
+                if (newStartTime != null && _tournamentTimezone != null) {
+                  final timezone = tz.getLocation(_tournamentTimezone!);
+                  final newStartTimeTZ = tz.TZDateTime.from(newStartTime.toDate(), timezone);
+                  if (_matchStartTime != newStartTimeTZ) {
+                    setState(() {
+                      _matchStartTime = newStartTimeTZ;
+                    });
+                    _startCountdown();
+                  }
                 }
                 final newTeam1Score = _getCurrentScoreFromMatch(newMatch, true);
                 final newTeam2Score = _getCurrentScoreFromMatch(newMatch, false);
@@ -272,11 +292,11 @@ class _MatchControlPageState extends State<MatchControlPage>
         toastification.show(
           context: context,
           type: ToastificationType.warning,
-          title: Text('Cannot Start Match', style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB))), // Background
-          description: Text('Please wait until the scheduled start time.', style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB))), // Background
+          title: Text('Cannot Start Match', style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB))),
+          description: Text('Please wait until the scheduled start time.', style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB))),
           autoCloseDuration: const Duration(seconds: 2),
-          backgroundColor: const Color(0xFFE9C46A), // Mood Booster
-          foregroundColor: const Color(0xFFFDFCFB), // Background
+          backgroundColor: const Color(0xFFE9C46A),
+          foregroundColor: const Color(0xFFFDFCFB),
           alignment: Alignment.bottomCenter,
         );
       }
@@ -315,11 +335,11 @@ class _MatchControlPageState extends State<MatchControlPage>
         toastification.show(
           context: context,
           type: ToastificationType.success,
-          title: Text('Match Started', style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB))), // Background
-          description: Text('The match has started successfully.', style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB))), // Background
+          title: Text('Match Started', style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB))),
+          description: Text('The match has started successfully.', style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB))),
           autoCloseDuration: const Duration(seconds: 2),
-          backgroundColor: const Color(0xFF2A9D8F), // Success
-          foregroundColor: const Color(0xFFFDFCFB), // Background
+          backgroundColor: const Color(0xFF2A9D8F),
+          foregroundColor: const Color(0xFFFDFCFB),
           alignment: Alignment.bottomCenter,
         );
       }
@@ -328,11 +348,11 @@ class _MatchControlPageState extends State<MatchControlPage>
         toastification.show(
           context: context,
           type: ToastificationType.error,
-          title: Text('Error', style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB))), // Background
-          description: Text('Failed to start match: $e', style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB))), // Background
+          title: Text('Error', style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB))),
+          description: Text('Failed to start match: $e', style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB))),
           autoCloseDuration: const Duration(seconds: 2),
-          backgroundColor: const Color(0xFFE76F51), // Error
-          foregroundColor: const Color(0xFFFDFCFB), // Background
+          backgroundColor: const Color(0xFFE76F51),
+          foregroundColor: const Color(0xFFFDFCFB),
           alignment: Alignment.bottomCenter,
         );
       }
@@ -385,30 +405,18 @@ class _MatchControlPageState extends State<MatchControlPage>
         _checkSetCompletion();
         _initializeServer();
       });
-      if (mounted) {
-        // toastification.show(
-        //   context: context,
-        //   type: ToastificationType.success,
-        //   title: Text('Score Updated', style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB))), // Background
-        //   description: Text('Point for ${isTeam1 ? (widget.isDoubles ? _match['team1'].join(', ') : _match['player1']) : (widget.isDoubles ? _match['team2'].join(', ') : _match['player2'])}', style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB))), // Background
-        //   autoCloseDuration: const Duration(seconds: 2),
-        //   backgroundColor: const Color(0xFF2A9D8F), // Success
-        //   foregroundColor: const Color(0xFFFDFCFB), // Background
-        //   alignment: Alignment.bottomCenter,
-        // );
-      }
     } catch (e) {
       if (mounted) {
-        // toastification.show(
-        //   context: context,
-        //   type: ToastificationType.error,
-        //   title: Text('Update Failed', style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB))), // Background
-        //   description: Text('Failed to update score: $e', style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB))), // Background
-        //   autoCloseDuration: const Duration(seconds: 2),
-        //   backgroundColor: const Color(0xFFE76F51), // Error
-        //   foregroundColor: const Color(0xFFFDFCFB), // Background
-        //   alignment: Alignment.bottomCenter,
-        // );
+        toastification.show(
+          context: context,
+          type: ToastificationType.error,
+          title: Text('Update Failed', style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB))),
+          description: Text('Failed to update score: $e', style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB))),
+          autoCloseDuration: const Duration(seconds: 2),
+          backgroundColor: const Color(0xFFE76F51),
+          foregroundColor: const Color(0xFFFDFCFB),
+          alignment: Alignment.bottomCenter,
+        );
       }
     } finally {
       if (mounted) setState(() => _isLoading = false);
@@ -454,30 +462,18 @@ class _MatchControlPageState extends State<MatchControlPage>
         _checkSetCompletion();
         _initializeServer();
       });
-      if (mounted) {
-        // toastification.show(
-        //   context: context,
-        //   type: ToastificationType.success,
-        //   title: Text('Score Adjusted', style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB))), // Background
-        //   description: Text('Score decreased for ${isTeam1 ? (widget.isDoubles ? _match['team1'].join(', ') : _match['player1']) : (widget.isDoubles ? _match['team2'].join(', ') : _match['player2'])}', style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB))), // Background
-        //   autoCloseDuration: const Duration(seconds: 2),
-        //   backgroundColor: const Color(0xFF2A9D8F), // Success
-        //   foregroundColor: const Color(0xFFFDFCFB), // Background
-        //   alignment: Alignment.bottomCenter,
-        // );
-      }
     } catch (e) {
       if (mounted) {
-        // toastification.show(
-        //   context: context,
-        //   type: ToastificationType.error,
-        //   title: Text('Update Failed', style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB))), // Background
-        //   description: Text('Failed to update score: $e', style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB))), // Background
-        //   autoCloseDuration: const Duration(seconds: 2),
-        //   backgroundColor: const Color(0xFFE76F51), // Error
-        //   foregroundColor: const Color(0xFFFDFCFB), // Background
-        //   alignment: Alignment.bottomCenter,
-        // );
+        toastification.show(
+          context: context,
+          type: ToastificationType.error,
+          title: Text('Update Failed', style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB))),
+          description: Text('Failed to update score: $e', style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB))),
+          autoCloseDuration: const Duration(seconds: 2),
+          backgroundColor: const Color(0xFFE76F51),
+          foregroundColor: const Color(0xFFFDFCFB),
+          alignment: Alignment.bottomCenter,
+        );
       }
     } finally {
       if (mounted) setState(() => _isLoading = false);
@@ -573,11 +569,9 @@ class _MatchControlPageState extends State<MatchControlPage>
       } else if (currentGame == 3 && team2Wins > team1Wins) {
         winner = widget.isDoubles ? 'team2' : 'player2';
       } else {
-        // Early termination without a clear winner (e.g., manual termination)
         terminationReason = 'Match terminated manually without a winner';
       }
 
-      // Update participant scores only if there is a winner
       List<Map<String, dynamic>> updatedParticipants =
           List<Map<String, dynamic>>.from(tournamentDoc.data()!['participants'] ?? []);
       if (winner != null) {
@@ -605,7 +599,7 @@ class _MatchControlPageState extends State<MatchControlPage>
         ..._match,
         'completed': true,
         'winner': winner,
-        'terminationReason': terminationReason, // Store reason for termination
+        'terminationReason': terminationReason,
         'liveScores': {
           ...currentScores,
           'isLive': false,
@@ -628,16 +622,16 @@ class _MatchControlPageState extends State<MatchControlPage>
         toastification.show(
           context: context,
           type: ToastificationType.success,
-          title: Text('Match Terminated', style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB))), // Background
+          title: Text('Match Terminated', style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB))),
           description: Text(
             winner != null
                 ? 'Winner: ${winner == 'team1' || winner == 'player1' ? (widget.isDoubles ? _match['team1'].join(', ') : _match['player1']) : (widget.isDoubles ? _match['team2'].join(', ') : _match['player2'])}'
                 : 'Match terminated without a winner: $terminationReason',
-            style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB)), // Background
+            style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB)),
           ),
           autoCloseDuration: const Duration(seconds: 3),
-          backgroundColor: const Color(0xFF2A9D8F), // Success
-          foregroundColor: const Color(0xFFFDFCFB), // Background
+          backgroundColor: const Color(0xFF2A9D8F),
+          foregroundColor: const Color(0xFFFDFCFB),
           alignment: Alignment.bottomCenter,
         );
       }
@@ -646,11 +640,11 @@ class _MatchControlPageState extends State<MatchControlPage>
         toastification.show(
           context: context,
           type: ToastificationType.error,
-          title: Text('Error', style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB))), // Background
-          description: Text('Failed to terminate match: $e', style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB))), // Background
+          title: Text('Error', style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB))),
+          description: Text('Failed to terminate match: $e', style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB))),
           autoCloseDuration: const Duration(seconds: 3),
-          backgroundColor: const Color(0xFFE76F51), // Error
-          foregroundColor: const Color(0xFFFDFCFB), // Background
+          backgroundColor: const Color(0xFFE76F51),
+          foregroundColor: const Color(0xFFFDFCFB),
           alignment: Alignment.bottomCenter,
         );
       }
@@ -695,11 +689,11 @@ class _MatchControlPageState extends State<MatchControlPage>
           toastification.show(
             context: context,
             type: ToastificationType.warning,
-            title: Text('Match Limit Reached', style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB))), // Background
-            description: Text('Maximum sets (3) reached. Please end the match.', style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB))), // Background
+            title: Text('Match Limit Reached', style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB))),
+            description: Text('Maximum sets (3) reached. Please end the match.', style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB))),
             autoCloseDuration: const Duration(seconds: 2),
-            backgroundColor: const Color(0xFFE9C46A), // Mood Booster
-            foregroundColor: const Color(0xFFFDFCFB), // Background
+            backgroundColor: const Color(0xFFE9C46A),
+            foregroundColor: const Color(0xFFFDFCFB),
             alignment: Alignment.bottomCenter,
           );
         }
@@ -731,11 +725,11 @@ class _MatchControlPageState extends State<MatchControlPage>
         toastification.show(
           context: context,
           type: ToastificationType.success,
-          title: Text('Next Set Started', style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB))), // Background
-          description: Text('Set ${currentGame + 1} has begun.', style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB))), // Background
+          title: Text('Next Set Started', style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB))),
+          description: Text('Set ${currentGame + 1} has begun.', style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB))),
           autoCloseDuration: const Duration(seconds: 2),
-          backgroundColor: const Color(0xFF2A9D8F), // Success
-          foregroundColor: const Color(0xFFFDFCFB), // Background
+          backgroundColor: const Color(0xFF2A9D8F),
+          foregroundColor: const Color(0xFFFDFCFB),
           alignment: Alignment.bottomCenter,
         );
       }
@@ -744,11 +738,11 @@ class _MatchControlPageState extends State<MatchControlPage>
         toastification.show(
           context: context,
           type: ToastificationType.error,
-          title: Text('Error', style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB))), // Background
-          description: Text('Failed to start next set: $e', style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB))), // Background
+          title: Text('Error', style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB))),
+          description: Text('Failed to start next set: $e', style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB))),
           autoCloseDuration: const Duration(seconds: 2),
-          backgroundColor: const Color(0xFFE76F51), // Error
-          foregroundColor: const Color(0xFFFDFCFB), // Background
+          backgroundColor: const Color(0xFFE76F51),
+          foregroundColor: const Color(0xFFFDFCFB),
           alignment: Alignment.bottomCenter,
         );
       }
@@ -767,21 +761,21 @@ class _MatchControlPageState extends State<MatchControlPage>
             badges.Badge(
               showBadge: _currentServer == (widget.isDoubles ? 'team1' : 'player1'),
               badgeStyle: const badges.BadgeStyle(
-                badgeColor: Color(0xFFF4A261), // Accent
+                badgeColor: Color(0xFFF4A261),
               ),
               position: badges.BadgePosition.topEnd(end: -20, top: -10),
               badgeContent:
-                  const Icon(Icons.sports_tennis, size: 12, color: Color(0xFFFDFCFB)), // Background
+                  const Icon(Icons.sports_tennis, size: 12, color: Color(0xFFFDFCFB)),
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFFFFFFF).withOpacity(0.1), // Surface
+                  color: const Color(0xFFFFFFFF).withOpacity(0.1),
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Text(
                   '${_getCurrentScore(true)}',
                   style: GoogleFonts.poppins(
-                    color: const Color(0xFFFDFCFB), // Background
+                    color: const Color(0xFFFDFCFB),
                     fontSize: 42,
                     fontWeight: FontWeight.bold,
                   ),
@@ -793,7 +787,7 @@ class _MatchControlPageState extends State<MatchControlPage>
               child: Text(
                 '-',
                 style: GoogleFonts.poppins(
-                  color: const Color(0xFFA8DADC), // Cool Blue Highlights
+                  color: const Color(0xFFA8DADC),
                   fontSize: 32,
                 ),
               ),
@@ -801,21 +795,21 @@ class _MatchControlPageState extends State<MatchControlPage>
             badges.Badge(
               showBadge: _currentServer == (widget.isDoubles ? 'team2' : 'player2'),
               badgeStyle: const badges.BadgeStyle(
-                badgeColor: Color(0xFFF4A261), // Accent
+                badgeColor: Color(0xFFF4A261),
               ),
               position: badges.BadgePosition.topEnd(end: -20, top: -10),
               badgeContent:
-                  const Icon(Icons.sports_tennis, size: 12, color: Color(0xFFFDFCFB)), // Background
+                  const Icon(Icons.sports_tennis, size: 12, color: Color(0xFFFDFCFB)),
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFFFFFFF).withOpacity(0.1), // Surface
+                  color: const Color(0xFFFFFFFF).withOpacity(0.1),
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Text(
                   '${_getCurrentScore(false)}',
                   style: GoogleFonts.poppins(
-                    color: const Color(0xFFFDFCFB), // Background
+                    color: const Color(0xFFFDFCFB),
                     fontSize: 42,
                     fontWeight: FontWeight.bold,
                   ),
@@ -834,13 +828,13 @@ class _MatchControlPageState extends State<MatchControlPage>
                 child: Container(
                   padding: const EdgeInsets.all(6),
                   decoration: BoxDecoration(
-                    color: const Color(0xFF2A9D8F).withOpacity(0.2), // Success
+                    color: const Color(0xFF2A9D8F).withOpacity(0.2),
                     borderRadius: BorderRadius.circular(20),
                   ),
                   child: Text(
                     '+1',
                     style: GoogleFonts.poppins(
-                      color: const Color(0xFF2A9D8F), // Success
+                      color: const Color(0xFF2A9D8F),
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
                     ),
@@ -859,13 +853,13 @@ class _MatchControlPageState extends State<MatchControlPage>
                 child: Container(
                   padding: const EdgeInsets.all(6),
                   decoration: BoxDecoration(
-                    color: const Color(0xFF2A9D8F).withOpacity(0.2), // Success
+                    color: const Color(0xFF2A9D8F).withOpacity(0.2),
                     borderRadius: BorderRadius.circular(20),
                   ),
                   child: Text(
                     '+1',
                     style: GoogleFonts.poppins(
-                      color: const Color(0xFF2A9D8F), // Success
+                      color: const Color(0xFF2A9D8F),
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
                     ),
@@ -884,7 +878,7 @@ class _MatchControlPageState extends State<MatchControlPage>
         Text(
           'POINT CONTROL',
           style: GoogleFonts.poppins(
-            color: const Color(0xFFA8DADC), // Cool Blue Highlights
+            color: const Color(0xFFA8DADC),
             fontSize: 12,
             letterSpacing: 1.2,
           ),
@@ -898,14 +892,14 @@ class _MatchControlPageState extends State<MatchControlPage>
               icon: Icons.add,
               onPressed: () => _updateLiveScore(true),
               isEnabled: !_isLoading,
-              color: const Color.fromARGB(255, 29, 109, 112), // Cool Blue Highlights
+              color: const Color.fromARGB(255, 29, 109, 112),
             ),
             _buildScoreButton(
               label: 'POINT ',
               icon: Icons.add,
               onPressed: () => _updateLiveScore(false),
               isEnabled: !_isLoading,
-               color: const Color.fromARGB(255, 29, 109, 112), // Cool Blue Highlights
+              color: const Color.fromARGB(255, 29, 109, 112),
             ),
           ],
         ),
@@ -918,14 +912,14 @@ class _MatchControlPageState extends State<MatchControlPage>
               icon: Icons.remove,
               onPressed: () => _decreaseScore(true),
               isEnabled: !_isLoading,
-              color: const Color.fromARGB(255, 199, 160, 60), // Mood Booster
+              color: const Color.fromARGB(255, 199, 160, 60),
             ),
             _buildScoreButton(
               label: 'POINT ',
               icon: Icons.remove,
               onPressed: () => _decreaseScore(false),
               isEnabled: !_isLoading,
-              color: const Color.fromARGB(255, 199, 160, 60),// Mood Booster
+              color: const Color.fromARGB(255, 199, 160, 60),
             ),
           ],
         ),
@@ -954,7 +948,7 @@ class _MatchControlPageState extends State<MatchControlPage>
         Text(
           'Set $currentGame Completed',
           style: GoogleFonts.poppins(
-            color: const Color(0xFFF4A261), // Accent
+            color: const Color(0xFFF4A261),
             fontSize: 18,
             fontWeight: FontWeight.bold,
           ),
@@ -965,7 +959,7 @@ class _MatchControlPageState extends State<MatchControlPage>
               ? (widget.isDoubles ? _match['team1'].join(' & ') : _match['player1'])
               : (widget.isDoubles ? _match['team2'].join(' & ') : _match['player2'])} won the set',
           style: GoogleFonts.poppins(
-            color: const Color(0xFFFDFCFB), // Background
+            color: const Color(0xFFFDFCFB),
             fontSize: 16,
           ),
         ),
@@ -974,7 +968,7 @@ class _MatchControlPageState extends State<MatchControlPage>
           _buildModernButton(
             text: 'START SET ${currentGame + 1}',
             gradient: const LinearGradient(
-              colors: [Color(0xFF6C9A8B), Color(0xFFC1DADB)], // Primary to Secondary
+              colors: [Color(0xFF6C9A8B), Color(0xFFC1DADB)],
             ),
             onPressed: _startNextSet,
             isLoading: _isLoading,
@@ -983,7 +977,7 @@ class _MatchControlPageState extends State<MatchControlPage>
         _buildModernButton(
           text: isMatchOver ? 'CONCLUDE MATCH' : 'TERMINATE MATCH',
           gradient: const LinearGradient(
-            colors: [Color(0xFFE76F51), Color(0xFFF4A261)], // Error to Accent
+            colors: [Color(0xFFE76F51), Color(0xFFF4A261)],
           ),
           onPressed: _endMatch,
           isLoading: _isLoading,
@@ -1006,21 +1000,21 @@ class _MatchControlPageState extends State<MatchControlPage>
         padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(12),
-          color: isEnabled ? color.withOpacity(0.2) : const Color(0xFF757575).withOpacity(0.1), // Text Secondary
+          color: isEnabled ? color.withOpacity(0.2) : const Color(0xFF757575).withOpacity(0.1),
           border: Border.all(
-            color: isEnabled ? color : const Color(0xFF757575), // Text Secondary
+            color: isEnabled ? color : const Color(0xFF757575),
             width: 1,
           ),
         ),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, size: 18, color: isEnabled ? color : const Color(0xFF757575)), // Text Secondary
+            Icon(icon, size: 18, color: isEnabled ? color : const Color(0xFF757575)),
             const SizedBox(width: 8),
             Text(
               label,
               style: GoogleFonts.poppins(
-                color: isEnabled ? color : const Color(0xFF757575), // Text Secondary
+                color: isEnabled ? color : const Color(0xFF757575),
                 fontSize: 14,
                 fontWeight: FontWeight.w600,
               ),
@@ -1043,7 +1037,7 @@ class _MatchControlPageState extends State<MatchControlPage>
         borderRadius: BorderRadius.circular(12),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFF1D3557).withOpacity(0.2), // Deep Indigo
+            color: const Color(0xFF1D3557).withOpacity(0.2),
             blurRadius: 10,
             spreadRadius: 2,
           ),
@@ -1063,13 +1057,13 @@ class _MatchControlPageState extends State<MatchControlPage>
                 height: 20,
                 child: CircularProgressIndicator(
                   strokeWidth: 2,
-                  valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFFDFCFB)), // Background
+                  valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFFDFCFB)),
                 ),
               )
             : Text(
                 text,
                 style: GoogleFonts.poppins(
-                  color: const Color(0xFFFDFCFB), // Background
+                  color: const Color(0xFFFDFCFB),
                   fontSize: 16,
                   fontWeight: FontWeight.w600,
                 ),
@@ -1122,7 +1116,7 @@ class _MatchControlPageState extends State<MatchControlPage>
       backgroundColor: Colors.transparent,
       body: Container(
         decoration: const BoxDecoration(
-         color: Color.fromARGB(255, 2, 61, 65)
+          color: Color.fromARGB(255, 2, 61, 65),
         ),
         child: SafeArea(
           child: Column(
@@ -1130,14 +1124,14 @@ class _MatchControlPageState extends State<MatchControlPage>
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFFFFFFF).withOpacity(0.05), // Surface
-                  border: Border(bottom: BorderSide(color: const Color(0xFFFDFCFB).withOpacity(0.1))), // Background
+                  color: const Color(0xFFFFFFFF).withOpacity(0.05),
+                  border: Border(bottom: BorderSide(color: const Color(0xFFFDFCFB).withOpacity(0.1))),
                 ),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     IconButton(
-                      icon: const Icon(Icons.arrow_back, color: Color(0xFFA8DADC)), // Cool Blue Highlights
+                      icon: const Icon(Icons.arrow_back, color: Color(0xFFA8DADC)),
                       onPressed: () => Navigator.pop(context),
                     ),
                     Expanded(
@@ -1146,17 +1140,17 @@ class _MatchControlPageState extends State<MatchControlPage>
                           Text(
                             'Round ${_match['round']}',
                             style: GoogleFonts.poppins(
-                              color: const Color(0xFFFDFCFB), // Background
+                              color: const Color(0xFFFDFCFB),
                               fontSize: 16,
                               fontWeight: FontWeight.w600,
                             ),
                             textAlign: TextAlign.center,
                           ),
-                          if (_matchStartTime != null)
+                          if (_matchStartTime != null && _tournamentTimezone != null)
                             Text(
-                              '${DateFormat('MMM dd, yyyy HH:mm').format(_matchStartTime!.toDate())} IST',
+                              '${DateFormat('MMM dd, yyyy HH:mm').format(_matchStartTime!)} ($_tournamentTimezone)',
                               style: GoogleFonts.poppins(
-                                color: const Color(0xFFA8DADC), // Cool Blue Highlights
+                                color: const Color(0xFFA8DADC),
                                 fontSize: 12,
                               ),
                             ),
@@ -1190,7 +1184,7 @@ class _MatchControlPageState extends State<MatchControlPage>
                                             ? _match['team1'].join(', ')
                                             : _match['player1'],
                                         style: GoogleFonts.poppins(
-                                          color: const Color(0xFFFDFCFB), // Background
+                                          color: const Color(0xFFFDFCFB),
                                           fontSize: 18,
                                           fontWeight: FontWeight.bold,
                                         ),
@@ -1210,14 +1204,14 @@ class _MatchControlPageState extends State<MatchControlPage>
                                             Icon(
                                               Icons.sports_tennis,
                                               size: 16,
-                                              color: const Color(0xFFF4A261), // Accent
+                                              color: const Color(0xFFF4A261),
                                             ),
                                             const SizedBox(width: 4),
                                             Flexible(
                                               child: Text(
                                                 'Serving (${_getServiceCourt(true)})',
                                                 style: GoogleFonts.poppins(
-                                                  color: const Color(0xFFF4A261), // Accent
+                                                  color: const Color(0xFFF4A261),
                                                   fontSize: MediaQuery.of(context)
                                                                   .size
                                                                   .width <
@@ -1244,7 +1238,7 @@ class _MatchControlPageState extends State<MatchControlPage>
                                   Text(
                                     'Set $currentGame',
                                     style: GoogleFonts.poppins(
-                                      color: const Color(0xFFA8DADC), // Cool Blue Highlights
+                                      color: const Color(0xFFA8DADC),
                                       fontSize: 16,
                                       fontWeight: FontWeight.w600,
                                     ),
@@ -1258,13 +1252,13 @@ class _MatchControlPageState extends State<MatchControlPage>
                                       Container(
                                         padding: const EdgeInsets.all(6),
                                         decoration: BoxDecoration(
-                                          color: const Color(0xFFA8DADC).withOpacity(0.2), // Cool Blue Highlights
+                                          color: const Color(0xFFA8DADC).withOpacity(0.2),
                                           borderRadius: BorderRadius.circular(8),
                                         ),
                                         child: Text(
                                           '$team1Wins',
                                           style: GoogleFonts.poppins(
-                                            color: const Color(0xFFA8DADC), // Cool Blue Highlights
+                                            color: const Color(0xFFA8DADC),
                                             fontSize: 16,
                                             fontWeight: FontWeight.w600,
                                           ),
@@ -1274,13 +1268,13 @@ class _MatchControlPageState extends State<MatchControlPage>
                                       Container(
                                         padding: const EdgeInsets.all(6),
                                         decoration: BoxDecoration(
-                                          color: const Color(0xFFA8DADC).withOpacity(0.2), // Cool Blue Highlights
+                                          color: const Color(0xFFA8DADC).withOpacity(0.2),
                                           borderRadius: BorderRadius.circular(8),
                                         ),
                                         child: Text(
                                           '$team2Wins',
                                           style: GoogleFonts.poppins(
-                                            color: const Color(0xFFA8DADC), // Cool Blue Highlights
+                                            color: const Color(0xFFA8DADC),
                                             fontSize: 16,
                                             fontWeight: FontWeight.w600,
                                           ),
@@ -1304,7 +1298,7 @@ class _MatchControlPageState extends State<MatchControlPage>
                                             ? _match['team2'].join(', ')
                                             : _match['player2'],
                                         style: GoogleFonts.poppins(
-                                          color: const Color(0xFFFDFCFB), // Background
+                                          color: const Color(0xFFFDFCFB),
                                           fontSize: 18,
                                           fontWeight: FontWeight.bold,
                                         ),
@@ -1324,14 +1318,14 @@ class _MatchControlPageState extends State<MatchControlPage>
                                             Icon(
                                               Icons.sports_tennis,
                                               size: 16,
-                                              color: const Color(0xFFF4A261), // Accent
+                                              color: const Color(0xFFF4A261),
                                             ),
                                             const SizedBox(width: 4),
                                             Flexible(
                                               child: Text(
                                                 'Serving (${_getServiceCourt(false)})',
                                                 style: GoogleFonts.poppins(
-                                                  color: const Color(0xFFF4A261), // Accent
+                                                  color: const Color(0xFFF4A261),
                                                   fontSize: MediaQuery.of(context)
                                                                   .size
                                                                   .width <
@@ -1368,7 +1362,7 @@ class _MatchControlPageState extends State<MatchControlPage>
                                     Text(
                                       'Set ${index + 1}: ${team1Scores[index]} - ${team2Scores[index]}',
                                       style: GoogleFonts.poppins(
-                                        color: const Color(0xFFFDFCFB), // Background
+                                        color: const Color(0xFFFDFCFB),
                                         fontSize: 14,
                                       ),
                                     ),
@@ -1376,7 +1370,7 @@ class _MatchControlPageState extends State<MatchControlPage>
                                       Text(
                                         'Set ${index + 1} won by $winner',
                                         style: GoogleFonts.poppins(
-                                          color: const Color(0xFF2A9D8F), // Success
+                                          color: const Color(0xFF2A9D8F),
                                           fontSize: 12,
                                           fontWeight: FontWeight.w600,
                                         ),
@@ -1400,7 +1394,7 @@ class _MatchControlPageState extends State<MatchControlPage>
                                         child: Text(
                                           'Countdown: $_countdown',
                                           style: GoogleFonts.poppins(
-                                            color: const Color(0xFFA8DADC), // Cool Blue Highlights
+                                            color: const Color(0xFFA8DADC),
                                             fontSize: 14,
                                           ),
                                           textAlign: TextAlign.center,
@@ -1411,7 +1405,7 @@ class _MatchControlPageState extends State<MatchControlPage>
                                           ? 'Starting...'
                                           : 'Start Match',
                                       gradient: const LinearGradient(
-                                        colors: [Color(0xFF2A9D8F), Color(0xFF6C9A8B)], // Success to Primary
+                                        colors: [Color(0xFF2A9D8F), Color(0xFF6C9A8B)],
                                       ),
                                       onPressed: _startMatch,
                                       isLoading: _isLoading,

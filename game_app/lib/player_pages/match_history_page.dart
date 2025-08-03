@@ -1,3 +1,4 @@
+
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:game_app/tournaments/match_details_page.dart';
@@ -5,6 +6,8 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 import 'package:toastification/toastification.dart';
 import 'package:flutter_staggered_animations/flutter_staggered_animations.dart';
+import 'package:timezone/timezone.dart' as tz;
+import 'package:timezone/data/latest.dart' as tz;
 
 class MatchHistoryPage extends StatefulWidget {
   final String playerId;
@@ -26,6 +29,7 @@ class _MatchHistoryPageState extends State<MatchHistoryPage> {
   @override
   void initState() {
     super.initState();
+    tz.initializeTimeZones(); // Initialize timezone data
     _fetchPlayerMatches();
   }
 
@@ -51,8 +55,14 @@ class _MatchHistoryPageState extends State<MatchHistoryPage> {
       for (var tournamentDoc in tournamentsQuery.docs) {
         final tournamentData = tournamentDoc.data();
         final matches = List<Map<String, dynamic>>.from(tournamentData['matches'] ?? []);
-
-        debugPrint('Tournament "${tournamentData['name']}" has ${matches.length} matches');
+        final tournamentTimezone = tournamentData['timezone']?.toString() ?? 'Asia/Kolkata';
+        tz.Location tzLocation;
+        try {
+          tzLocation = tz.getLocation(tournamentTimezone);
+        } catch (e) {
+          debugPrint('Invalid timezone for tournament ${tournamentDoc.id}: $tournamentTimezone, defaulting to Asia/Kolkata');
+          tzLocation = tz.getLocation('Asia/Kolkata');
+        }
 
         for (var match in matches) {
           debugPrint('Match: ${match['player1']} vs ${match['player2']}');
@@ -61,11 +71,17 @@ class _MatchHistoryPageState extends State<MatchHistoryPage> {
 
           if (_isPlayerInMatch(match) && match['completed'] == true) {
             debugPrint('MATCH FOUND FOR PLAYER ${widget.playerId}');
+            final startTime = match['startTime'] != null
+                ? (match['startTime'] as Timestamp).toDate()
+                : (tournamentData['startDate'] as Timestamp).toDate();
+            final startTimeInTz = tz.TZDateTime.from(startTime, tzLocation);
             playerMatches.add({
               ...match,
               'tournamentId': tournamentDoc.id,
               'tournamentName': tournamentData['name'] ?? 'Unnamed Tournament',
-              'startDate': tournamentData['startDate'],
+              'startTime': startTime, // Keep for compatibility
+              'startTimeInTz': startTimeInTz,
+              'timezone': tournamentTimezone,
               'endDate': tournamentData['endDate'],
               'venue': tournamentData['venue'],
               'city': tournamentData['city'],
@@ -76,7 +92,7 @@ class _MatchHistoryPageState extends State<MatchHistoryPage> {
 
       if (mounted) {
         setState(() {
-          _matches = playerMatches;
+          _matches = playerMatches..sort((a, b) => (b['startTimeInTz'] as tz.TZDateTime).compareTo(a['startTimeInTz'] as tz.TZDateTime));
           _isLoading = false;
           if (playerMatches.isEmpty) {
             _showToast = true;
@@ -128,7 +144,6 @@ class _MatchHistoryPageState extends State<MatchHistoryPage> {
     final player1Id = match['player1Id']?.toString() ?? '';
     final player2Id = match['player2Id']?.toString() ?? '';
 
-    // Calculate set scores
     int player1Sets = 0;
     int player2Sets = 0;
     for (int i = 0; i < player1Scores.length && i < player2Scores.length; i++) {
@@ -140,7 +155,6 @@ class _MatchHistoryPageState extends State<MatchHistoryPage> {
     }
     final setScore = '$player1Sets-$player2Sets';
 
-    // Determine if the current player won or lost
     bool isPlayerWinner = (winner == 'player1' && player1Id == widget.playerId) ||
                          (winner == 'player2' && player2Id == widget.playerId);
 
@@ -282,10 +296,9 @@ class _MatchHistoryPageState extends State<MatchHistoryPage> {
                                         child: FadeInAnimation(child: child),
                                       ),
                                       children: _matches.map((match) {
-                                        final startTime = match['startTime'] != null
-                                            ? (match['startTime'] as Timestamp).toDate()
-                                            : (match['startDate'] as Timestamp).toDate();
-                                        final formattedTime = DateFormat('MMM dd, yyyy, hh:mm a').format(startTime);
+                                        final startTimeInTz = match['startTimeInTz'] as tz.TZDateTime;
+                                        final timezoneDisplay = match['timezone'] == 'Asia/Kolkata' ? 'IST' : match['timezone'];
+                                        final formattedTime = DateFormat('MMM dd, yyyy, hh:mm a').format(startTimeInTz) + ' $timezoneDisplay';
                                         final isDoubles = match['team1Ids'] != null && match['team2Ids'] != null;
                                         final result = _getMatchResult(match);
                                         final resultColor = _getResultColor(match);

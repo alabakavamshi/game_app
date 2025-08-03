@@ -8,9 +8,9 @@ import 'package:game_app/models/user_model.dart';
 import 'package:game_app/screens/auth_page.dart';
 import 'package:game_app/organiser_pages/hosted_tournaments_page.dart';
 import 'package:game_app/player_pages/joined_tournaments.dart';
+import 'package:game_app/umpire/hosted_umpire_matches.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:intl/intl.dart';
 import 'package:toastification/toastification.dart';
 
 class PlayerProfilePage extends StatefulWidget {
@@ -26,12 +26,17 @@ class _PlayerProfilePageState extends State<PlayerProfilePage> {
   final TextEditingController _emailController = TextEditingController();
   final TextEditingController _phoneController = TextEditingController();
   final TextEditingController _genderController = TextEditingController();
+  final TextEditingController _otpController = TextEditingController();
 
   final List<String> _genderOptions = ['Male', 'Female', 'Other', 'Prefer not to say'];
   bool _isUploadingImage = false;
   String? _profileImageUrl;
   bool _isEditing = false;
+  bool _isVerifyingPhone = false;
+  bool _isOtpSent = false;
+  String? _verificationId;
   Map<String, dynamic>? _playerStats;
+  String? _originalPhoneNumber;
 
   @override
   void initState() {
@@ -57,7 +62,85 @@ class _PlayerProfilePageState extends State<PlayerProfilePage> {
     _emailController.dispose();
     _phoneController.dispose();
     _genderController.dispose();
+    _otpController.dispose();
     super.dispose();
+  }
+
+  Future<bool> _isPhoneNumberInUse(String phoneNumber, String currentUserId) async {
+    if (phoneNumber.isEmpty) return false;
+    try {
+      final querySnapshot = await FirebaseFirestore.instance
+          .collection('users')
+          .where('phone', isEqualTo: phoneNumber)
+          .get();
+      return querySnapshot.docs.any((doc) => doc.id != currentUserId);
+    } catch (e) {
+      debugPrint('Error checking phone number: $e');
+      return true;
+    }
+  }
+
+  Future<void> _verifyPhoneNumber(String phoneNumber) async {
+    setState(() {
+      _isVerifyingPhone = true;
+    });
+
+    await FirebaseAuth.instance.verifyPhoneNumber(
+      phoneNumber: phoneNumber,
+      verificationCompleted: (PhoneAuthCredential credential) async {
+        await FirebaseAuth.instance.signInWithCredential(credential);
+        setState(() {
+          _isOtpSent = true;
+          _isVerifyingPhone = false;
+        });
+        _showToast('Phone number automatically verified', ToastificationType.success);
+      },
+      verificationFailed: (FirebaseAuthException e) {
+        setState(() {
+          _isVerifyingPhone = false;
+        });
+        _showToast('Verification failed: ${e.message}', ToastificationType.error);
+      },
+      codeSent: (String verificationId, int? resendToken) {
+        setState(() {
+          _verificationId = verificationId;
+          _isOtpSent = true;
+          _isVerifyingPhone = false;
+        });
+        _showToast('OTP sent to $phoneNumber', ToastificationType.success);
+      },
+      codeAutoRetrievalTimeout: (String verificationId) {
+        _verificationId = verificationId;
+      },
+      timeout: const Duration(seconds: 60),
+    );
+  }
+
+  Future<void> _verifyOtp(String otp) async {
+    if (_verificationId == null) return;
+
+    setState(() {
+      _isVerifyingPhone = true;
+    });
+
+    try {
+      final credential = PhoneAuthProvider.credential(
+        verificationId: _verificationId!,
+        smsCode: otp,
+      );
+      await FirebaseAuth.instance.signInWithCredential(credential);
+      setState(() {
+        _isOtpSent = false;
+        _isVerifyingPhone = false;
+        _otpController.clear();
+      });
+      _showToast('Phone number verified successfully', ToastificationType.success);
+    } catch (e) {
+      setState(() {
+        _isVerifyingPhone = false;
+      });
+      _showToast('Invalid OTP. Please try again', ToastificationType.error);
+    }
   }
 
   Future<void> _pickAndSetProfileImage(String uid) async {
@@ -153,7 +236,6 @@ class _PlayerProfilePageState extends State<PlayerProfilePage> {
             .collection('users')
             .doc(uid)
             .update({'profileImage': selectedSketch});
-
         if (mounted) {
           setState(() => _profileImageUrl = selectedSketch);
           context.read<AuthBloc>().add(AuthRefreshProfileEvent(uid));
@@ -179,95 +261,137 @@ class _PlayerProfilePageState extends State<PlayerProfilePage> {
     );
   }
 
-  void _showLogoutConfirmationDialog() {
-    showDialog(
-      context: context,
-      builder: (context) => Dialog(
-        backgroundColor: const Color(0xFF1E293B),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(24),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(
-                Icons.logout,
-                size: 48,
-                color: Colors.white70,
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'Log Out?',
-                style: GoogleFonts.poppins(
-                  color: Colors.white,
-                  fontSize: 20,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Are you sure you want to log out of your account?',
-                style: GoogleFonts.poppins(
-                  color: Colors.white70,
-                  fontSize: 14,
-                ),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 24),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: () => Navigator.pop(context),
-                      style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        side: BorderSide(color: Colors.white.withOpacity(0.2)),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                      ),
-                      child: Text(
-                        'Cancel',
-                        style: GoogleFonts.poppins(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: ElevatedButton(
-                      onPressed: () {
-                        context.read<AuthBloc>().add(AuthLogoutEvent());
-                        Navigator.pop(context);
-                        _showToast('Logged out successfully', ToastificationType.success);
-                      },
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFFDC2626),
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                      ),
-                      child: Text(
-                        'Log Out',
-                        style: GoogleFonts.poppins(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
+  Future<void> _saveProfileChanges(String uid) async {
+    try {
+      if (_isOtpSent && _otpController.text.isEmpty) {
+        _showToast('Please enter the OTP', ToastificationType.error);
+        return;
+      }
+
+      if (!_isOtpSent && _phoneController.text != _originalPhoneNumber) {
+        final isInUse = await _isPhoneNumberInUse(_phoneController.text, uid);
+        if (isInUse) {
+          _showToast('Phone number already in use', ToastificationType.error);
+          return;
+        }
+        await _verifyPhoneNumber(_phoneController.text);
+        return;
+      }
+
+      final updates = {
+        'firstName': _firstNameController.text.trim(),
+        'lastName': _lastNameController.text.trim(),
+        'gender': _genderController.text.trim(),
+      };
+
+      if (_phoneController.text != _originalPhoneNumber && _isOtpSent) {
+        updates['phone'] = _phoneController.text.trim();
+      }
+
+      await FirebaseFirestore.instance.collection('users').doc(uid).update(updates);
+      context.read<AuthBloc>().add(AuthRefreshProfileEvent(uid));
+      setState(() {
+        _isEditing = false;
+        _isOtpSent = false;
+        _otpController.clear();
+        _originalPhoneNumber = _phoneController.text;
+      });
+      _showToast('Profile updated successfully', ToastificationType.success);
+    } catch (e) {
+      _showToast('Failed to update profile: ${e.toString()}', ToastificationType.error);
+    }
+  }
+
+  Future<void> _fetchPlayerStats(String userId) async {
+    try {
+      final tournamentsQuery = await FirebaseFirestore.instance
+          .collection('tournaments')
+          .get();
+
+      int totalMatches = 0;
+      int wins = 0;
+      int losses = 0;
+      int currentStreak = 0;
+      int longestWinStreak = 0;
+      int longestLossStreak = 0;
+      String bestTournamentResult = 'N/A';
+      final tournamentResults = <String, String>{};
+
+      for (var tournamentDoc in tournamentsQuery.docs) {
+        final tournamentData = tournamentDoc.data();
+        final matches = List<Map<String, dynamic>>.from(tournamentData['matches'] ?? []);
+
+        bool playedInTournament = false;
+        int tournamentWins = 0;
+        int tournamentLosses = 0;
+
+        for (var match in matches) {
+          final player1Id = match['player1Id']?.toString() ?? '';
+          final player2Id = match['player2Id']?.toString() ?? '';
+          final team1Ids = List<String>.from(match['team1Ids'] ?? []);
+          final team2Ids = List<String>.from(match['team2Ids'] ?? []);
+
+          if (player1Id == userId ||
+              player2Id == userId ||
+              team1Ids.contains(userId) ||
+              team2Ids.contains(userId)) {
+            final isCompleted = match['completed'] == true;
+            if (isCompleted) {
+              totalMatches++;
+              playedInTournament = true;
+
+              final winner = match['winner']?.toString();
+              if (winner == 'player1' && player1Id == userId ||
+                  winner == 'player2' && player2Id == userId ||
+                  winner == 'team1' && team1Ids.contains(userId) ||
+                  winner == 'team2' && team2Ids.contains(userId)) {
+                wins++;
+                tournamentWins++;
+                currentStreak = currentStreak >= 0 ? currentStreak + 1 : 1;
+                longestWinStreak = currentStreak > longestWinStreak ? currentStreak : longestWinStreak;
+              } else if (winner != null && winner.isNotEmpty) {
+                losses++;
+                tournamentLosses++;
+                currentStreak = currentStreak <= 0 ? currentStreak - 1 : -1;
+                longestLossStreak = (-currentStreak) > longestLossStreak ? -currentStreak : longestLossStreak;
+              }
+            }
+          }
+        }
+
+        if (playedInTournament && (tournamentWins > 0 || tournamentLosses > 0)) {
+          tournamentResults[tournamentDoc.id] = '$tournamentWins-$tournamentLosses';
+        }
+      }
+
+      if (tournamentResults.isNotEmpty) {
+        bestTournamentResult = tournamentResults.values.reduce((a, b) {
+          final aParts = a.split('-').map(int.parse).toList();
+          final bParts = b.split('-').map(int.parse).toList();
+          final aWinRate = aParts[0] / (aParts[0] + aParts[1]);
+          final bWinRate = bParts[0] / (bParts[0] + bParts[1]);
+          return aWinRate > bWinRate ? a : b;
+        });
+      }
+
+      if (mounted) {
+        setState(() {
+          _playerStats = {
+            'totalMatches': totalMatches,
+            'wins': wins,
+            'losses': losses,
+            'winPercentage': totalMatches > 0 ? (wins / totalMatches * 100) : 0.0,
+            'currentStreak': currentStreak,
+            'longestWinStreak': longestWinStreak,
+            'longestLossStreak': longestLossStreak,
+            'bestTournamentResult': bestTournamentResult,
+          };
+        });
+      }
+    } catch (e) {
+      debugPrint('Error fetching stats: $e');
+      _showToast('Failed to fetch stats', ToastificationType.error);
+    }
   }
 
   Widget _buildProfileHeader(User user, AppUser appUser) {
@@ -395,26 +519,182 @@ class _PlayerProfilePageState extends State<PlayerProfilePage> {
     }
   }
 
+  Widget _buildEditProfileForm(User user, AppUser appUser) {
+    return Form(
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            child: TextFormField(
+              controller: _firstNameController,
+              style: GoogleFonts.poppins(color: Colors.white),
+              decoration: InputDecoration(
+                labelText: 'First Name',
+                labelStyle: GoogleFonts.poppins(color: Colors.white70),
+                border: InputBorder.none,
+              ),
+            ),
+          ),
+          Divider(height: 1, color: Colors.white.withOpacity(0.1)),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            child: TextFormField(
+              controller: _lastNameController,
+              style: GoogleFonts.poppins(color: Colors.white),
+              decoration: InputDecoration(
+                labelText: 'Last Name',
+                labelStyle: GoogleFonts.poppins(color: Colors.white70),
+                border: InputBorder.none,
+              ),
+            ),
+          ),
+          Divider(height: 1, color: Colors.white.withOpacity(0.1)),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            child: TextFormField(
+              controller: _phoneController,
+              style: GoogleFonts.poppins(color: Colors.white),
+              decoration: InputDecoration(
+                labelText: 'Phone',
+                labelStyle: GoogleFonts.poppins(color: Colors.white70),
+                border: InputBorder.none,
+                suffixIcon: _isVerifyingPhone
+                    ? const Padding(
+                        padding: EdgeInsets.all(8.0),
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : null,
+              ),
+              keyboardType: TextInputType.phone,
+              readOnly: _isOtpSent,
+            ),
+          ),
+          if (_isOtpSent) ...[
+            Divider(height: 1, color: Colors.white.withOpacity(0.1)),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: TextFormField(
+                controller: _otpController,
+                style: GoogleFonts.poppins(color: Colors.white),
+                decoration: InputDecoration(
+                  labelText: 'Enter OTP',
+                  labelStyle: GoogleFonts.poppins(color: Colors.white70),
+                  border: InputBorder.none,
+                  suffixIcon: IconButton(
+                    icon: const Icon(Icons.check, color: Colors.green),
+                    onPressed: () async {
+                      if (_otpController.text.length == 6) {
+                        await _verifyOtp(_otpController.text);
+                      }
+                    },
+                  ),
+                ),
+                keyboardType: TextInputType.number,
+                maxLength: 6,
+              ),
+            ),
+          ],
+          Divider(height: 1, color: Colors.white.withOpacity(0.1)),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            child: DropdownButtonFormField<String>(
+              value: _genderController.text.isNotEmpty ? _genderController.text : null,
+              items: _genderOptions.map((gender) {
+                return DropdownMenuItem<String>(
+                  value: gender,
+                  child: Text(
+                    gender,
+                    style: GoogleFonts.poppins(color: Colors.white),
+                  ),
+                );
+              }).toList(),
+              onChanged: (value) {
+                if (value != null) {
+                  _genderController.text = value;
+                }
+              },
+              decoration: InputDecoration(
+                labelText: 'Gender',
+                labelStyle: GoogleFonts.poppins(color: Colors.white70),
+                border: InputBorder.none,
+              ),
+              dropdownColor: const Color(0xFF1E293B),
+              style: GoogleFonts.poppins(color: Colors.white),
+              icon: Icon(Icons.arrow_drop_down, color: Colors.white70),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () {
+                      setState(() {
+                        _isEditing = false;
+                        _isOtpSent = false;
+                        _phoneController.text = _originalPhoneNumber ?? '';
+                        _otpController.clear();
+                      });
+                    },
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      side: BorderSide(color: Colors.white.withOpacity(0.2)),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    child: Text(
+                      'Cancel',
+                      style: GoogleFonts.poppins(color: Colors.white),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () async {
+                      await _saveProfileChanges(user.uid);
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF4F46E5),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    child: Text(
+                      _isOtpSent ? 'Verify & Save' : 'Save',
+                      style: GoogleFonts.poppins(color: Colors.white),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildProfileTab(User user, AppUser appUser) {
     return SingleChildScrollView(
       padding: const EdgeInsets.symmetric(horizontal: 24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Center(
-            child: _buildProfileHeader(user, appUser),
-          ),
+          Center(child: _buildProfileHeader(user, appUser)),
           const SizedBox(height: 32),
-          if (appUser.role.toLowerCase() == 'player')
-            _buildPlayerStatsSection(user, appUser),
+          if (appUser.role.toLowerCase() == 'player') _buildPlayerStatsSection(user, appUser),
           _buildSectionHeader('PERSONAL INFORMATION'),
           Container(
             decoration: BoxDecoration(
               color: Colors.white.withOpacity(0.05),
               borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                color: Colors.white.withOpacity(0.1),
-              ),
+              border: Border.all(color: Colors.white.withOpacity(0.1)),
             ),
             child: _isEditing
                 ? _buildEditProfileForm(user, appUser)
@@ -457,9 +737,7 @@ class _PlayerProfilePageState extends State<PlayerProfilePage> {
               description: 'View and manage your hosted tournaments',
               onTap: () => Navigator.push(
                 context,
-                MaterialPageRoute(
-                  builder: (context) => HostedTournamentsPage(userId: user.uid),
-                ),
+                MaterialPageRoute(builder: (context) => HostedTournamentsPage(userId: user.uid)),
               ),
               color: const Color(0xFF8B5CF6),
             ),
@@ -470,9 +748,7 @@ class _PlayerProfilePageState extends State<PlayerProfilePage> {
               description: 'View your tournament participations',
               onTap: () => Navigator.push(
                 context,
-                MaterialPageRoute(
-                  builder: (context) => JoinedTournamentsPage(userId: user.uid),
-                ),
+                MaterialPageRoute(builder: (context) => JoinedTournamentsPage(userId: user.uid)),
               ),
               color: const Color(0xFF10B981),
             ),
@@ -483,9 +759,7 @@ class _PlayerProfilePageState extends State<PlayerProfilePage> {
               description: 'View matches you are officiating',
               onTap: () => Navigator.push(
                 context,
-                MaterialPageRoute(
-                  builder: (context) => UmpiredMatchesPage(userId: user.uid),
-                ),
+                MaterialPageRoute(builder: (context) => UmpiredMatchesPage(userId: user.uid)),
               ),
               color: const Color(0xFF3B82F6),
             ),
@@ -509,9 +783,7 @@ class _PlayerProfilePageState extends State<PlayerProfilePage> {
             decoration: BoxDecoration(
               color: Colors.white.withOpacity(0.05),
               borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                color: Colors.white.withOpacity(0.1),
-              ),
+              border: Border.all(color: Colors.white.withOpacity(0.1)),
             ),
             child: Column(
               children: [
@@ -524,30 +796,15 @@ class _PlayerProfilePageState extends State<PlayerProfilePage> {
                       color: const Color(0xFFDC2626).withOpacity(0.1),
                       shape: BoxShape.circle,
                     ),
-                    child: const Icon(
-                      Icons.logout,
-                      color: Color(0xFFDC2626),
-                      size: 20,
-                    ),
+                    child: const Icon(Icons.logout, color: Color(0xFFDC2626), size: 20),
                   ),
                   title: Text(
                     'Log Out',
-                    style: GoogleFonts.poppins(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w500,
-                    ),
+                    style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.w500),
                   ),
-                  trailing: Icon(
-                    Icons.chevron_right,
-                    color: Colors.white.withOpacity(0.5),
-                  ),
+                  trailing: Icon(Icons.chevron_right, color: Colors.white.withOpacity(0.5)),
                 ),
-                Divider(
-                  height: 1,
-                  thickness: 1,
-                  color: Colors.white.withOpacity(0.1),
-                  indent: 56,
-                ),
+                Divider(height: 1, thickness: 1, color: Colors.white.withOpacity(0.1), indent: 56),
                 ListTile(
                   onTap: () => _showDeleteAccountConfirmationDialog(user.uid),
                   leading: Container(
@@ -557,23 +814,13 @@ class _PlayerProfilePageState extends State<PlayerProfilePage> {
                       color: const Color(0xFFDC2626).withOpacity(0.1),
                       shape: BoxShape.circle,
                     ),
-                    child: const Icon(
-                      Icons.delete_outline,
-                      color: Color(0xFFDC2626),
-                      size: 20,
-                    ),
+                    child: const Icon(Icons.delete_outline, color: Color(0xFFDC2626), size: 20),
                   ),
                   title: Text(
                     'Delete Account',
-                    style: GoogleFonts.poppins(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w500,
-                    ),
+                    style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.w500),
                   ),
-                  trailing: Icon(
-                    Icons.chevron_right,
-                    color: Colors.white.withOpacity(0.5),
-                  ),
+                  trailing: Icon(Icons.chevron_right, color: Colors.white.withOpacity(0.5)),
                 ),
               ],
             ),
@@ -608,7 +855,7 @@ class _PlayerProfilePageState extends State<PlayerProfilePage> {
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     _buildStatItem('Matches', _playerStats?['totalMatches']?.toString() ?? '0'),
-                    _buildStatItem(' Wins', _playerStats?['wins']?.toString() ?? '0'),
+                    _buildStatItem('Wins', _playerStats?['wins']?.toString() ?? '0'),
                     _buildStatItem('Losses', _playerStats?['losses']?.toString() ?? '0'),
                   ],
                 ),
@@ -616,14 +863,18 @@ class _PlayerProfilePageState extends State<PlayerProfilePage> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    _buildStatItem('Win %', _playerStats?['winPercentage'] != null
-                        ? '${_playerStats!['winPercentage'].toStringAsFixed(1)}%'
-                        : '0%'),
-                    _buildStatItem('Streak', _playerStats?['currentStreak'] != null
-                        ? (_playerStats!['currentStreak'] > 0
-                            ? 'W-${_playerStats!['currentStreak']}'
-                            : 'L-${-_playerStats!['currentStreak']}')
-                        : '-'),
+                    _buildStatItem(
+                        'Win %',
+                        _playerStats?['winPercentage'] != null
+                            ? '${_playerStats!['winPercentage'].toStringAsFixed(1)}%'
+                            : '0%'),
+                    _buildStatItem(
+                        'Streak',
+                        _playerStats?['currentStreak'] != null
+                            ? (_playerStats!['currentStreak'] > 0
+                                ? 'W-${_playerStats!['currentStreak']}'
+                                : 'L-${-_playerStats!['currentStreak']}')
+                            : '-'),
                     _buildStatItem('Best', _playerStats?['bestTournamentResult']?.toString() ?? '-'),
                   ],
                 ),
@@ -658,268 +909,6 @@ class _PlayerProfilePageState extends State<PlayerProfilePage> {
     );
   }
 
-  Widget _buildEditProfileForm(User user, AppUser appUser) {
-    return Form(
-      child: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            child: TextFormField(
-              controller: _firstNameController,
-              style: GoogleFonts.poppins(color: Colors.white),
-              decoration: InputDecoration(
-                labelText: 'First Name',
-                labelStyle: GoogleFonts.poppins(color: Colors.white70),
-                border: InputBorder.none,
-              ),
-            ),
-          ),
-          Divider(height: 1, color: Colors.white.withOpacity(0.1)),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            child: TextFormField(
-              controller: _lastNameController,
-              style: GoogleFonts.poppins(color: Colors.white),
-              decoration: InputDecoration(
-                labelText: 'Last Name',
-                labelStyle: GoogleFonts.poppins(color: Colors.white70),
-                border: InputBorder.none,
-              ),
-            ),
-          ),
-          Divider(height: 1, color: Colors.white.withOpacity(0.1)),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            child: TextFormField(
-              controller: _phoneController,
-              style: GoogleFonts.poppins(color: Colors.white),
-              decoration: InputDecoration(
-                labelText: 'Phone',
-                labelStyle: GoogleFonts.poppins(color: Colors.white70),
-                border: InputBorder.none,
-              ),
-              keyboardType: TextInputType.phone,
-            ),
-          ),
-          Divider(height: 1, color: Colors.white.withOpacity(0.1)),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            child: DropdownButtonFormField<String>(
-              value: _genderController.text.isNotEmpty ? _genderController.text : null,
-              items: _genderOptions.map((gender) {
-                return DropdownMenuItem<String>(
-                  value: gender,
-                  child: Text(
-                    gender,
-                    style: GoogleFonts.poppins(color: Colors.white),
-                  ),
-                );
-              }).toList(),
-              onChanged: (value) {
-                if (value != null) {
-                  _genderController.text = value;
-                }
-              },
-              decoration: InputDecoration(
-                labelText: 'Gender',
-                labelStyle: GoogleFonts.poppins(color: Colors.white70),
-                border: InputBorder.none,
-              ),
-              dropdownColor: const Color(0xFF1E293B),
-              style: GoogleFonts.poppins(color: Colors.white),
-              icon: Icon(Icons.arrow_drop_down, color: Colors.white70),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: () {
-                      setState(() => _isEditing = false);
-                    },
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      side: BorderSide(color: Colors.white.withOpacity(0.2)),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                    child: Text(
-                      'Cancel',
-                      style: GoogleFonts.poppins(color: Colors.white),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: () => _saveProfileChanges(user.uid),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF4F46E5),
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                    child: Text(
-                      'Save',
-                      style: GoogleFonts.poppins(color: Colors.white),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _saveProfileChanges(String uid) async {
-    try {
-      await FirebaseFirestore.instance.collection('users').doc(uid).update({
-        'firstName': _firstNameController.text.trim(),
-        'lastName': _lastNameController.text.trim(),
-        'phone': _phoneController.text.trim(),
-        'gender': _genderController.text.trim(),
-      });
-
-      context.read<AuthBloc>().add(AuthRefreshProfileEvent(uid));
-      setState(() => _isEditing = false);
-      _showToast('Profile updated successfully', ToastificationType.success);
-    } catch (e) {
-      _showToast('Failed to update profile: ${e.toString()}', ToastificationType.error);
-    }
-  }
-
-  Future<void> _fetchPlayerStats(String userId) async {
-    if (!mounted) return;
-
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-      }
-    });
-
-    try {
-      final tournamentsQuery = await FirebaseFirestore.instance
-          .collection('tournaments')
-          .get();
-
-      int totalMatches = 0;
-      int wins = 0;
-      int losses = 0;
-      DateTime? lastMatchDate;
-      int currentStreak = 0;
-      int longestWinStreak = 0;
-      int longestLossStreak = 0;
-      String bestTournamentResult = 'N/A';
-      final tournamentResults = <String, String>{};
-
-      for (var tournamentDoc in tournamentsQuery.docs) {
-        final tournamentData = tournamentDoc.data();
-        final matches = List<Map<String, dynamic>>.from(tournamentData['matches'] ?? []);
-
-        bool playedInTournament = false;
-        int tournamentWins = 0;
-        int tournamentLosses = 0;
-
-        for (var match in matches) {
-          final player1Id = match['player1Id']?.toString() ?? '';
-          final player2Id = match['player2Id']?.toString() ?? '';
-          final team1Ids = List<String>.from(match['team1Ids'] ?? []);
-          final team2Ids = List<String>.from(match['team2Ids'] ?? []);
-
-          if (player1Id == userId ||
-              player2Id == userId ||
-              team1Ids.contains(userId) ||
-              team2Ids.contains(userId)) {
-            final isCompleted = match['completed'] == true;
-
-            if (isCompleted) {
-              totalMatches++;
-              playedInTournament = true;
-
-              final winner = match['winner']?.toString();
-              if (winner == 'player1' && player1Id == userId ||
-                  winner == 'player2' && player2Id == userId ||
-                  winner == 'team1' && team1Ids.contains(userId) ||
-                  winner == 'team2' && team2Ids.contains(userId)) {
-                wins++;
-                tournamentWins++;
-                currentStreak = currentStreak >= 0 ? currentStreak + 1 : 1;
-                longestWinStreak = max(longestWinStreak, currentStreak);
-              } else if (winner != null && winner.isNotEmpty) {
-                losses++;
-                tournamentLosses++;
-                currentStreak = currentStreak <= 0 ? currentStreak - 1 : -1;
-                longestLossStreak = max(longestLossStreak, -currentStreak);
-              }
-
-              final matchTime = match['startTime'] as Timestamp?;
-              if (matchTime != null) {
-                final matchDate = matchTime.toDate();
-                if (lastMatchDate == null || matchDate.isAfter(lastMatchDate)) {
-                  lastMatchDate = matchDate;
-                }
-              }
-            }
-          }
-        }
-
-        if (playedInTournament) {
-          if (tournamentWins > 0 || tournamentLosses > 0) {
-            tournamentResults[tournamentDoc.id] = '$tournamentWins-$tournamentLosses';
-          }
-        }
-      }
-
-      if (tournamentResults.isNotEmpty) {
-        final bestResult = tournamentResults.values.reduce((a, b) {
-          final aParts = a.split('-');
-          final bParts = b.split('-');
-          final aWinRate = int.parse(aParts[0]) / (int.parse(aParts[0]) + int.parse(aParts[1]));
-          final bWinRate = int.parse(bParts[0]) / (int.parse(bParts[0]) + int.parse(bParts[1]));
-          return aWinRate > bWinRate ? a : b;
-        });
-        bestTournamentResult = bestResult;
-      }
-
-      if (mounted) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) {
-            setState(() {
-              _playerStats = {
-                'totalMatches': totalMatches,
-                'wins': wins,
-                'losses': losses,
-                'winPercentage': totalMatches > 0 ? (wins / totalMatches * 100) : 0.0,
-                'currentStreak': currentStreak,
-                'longestWinStreak': longestWinStreak,
-                'longestLossStreak': longestLossStreak,
-                'bestTournamentResult': bestTournamentResult,
-              };
-            });
-          }
-        });
-      }
-    } catch (e) {
-      if (mounted) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) {
-            setState(() {
-            });
-          }
-        });
-      }
-      debugPrint('Error fetching stats: $e');
-      _showToast('Failed to fetch stats', ToastificationType.error);
-    }
-  }
-
-  int max(int a, int b) => a > b ? a : b;
-
   Widget _buildProfileInfoItem({
     required IconData icon,
     required String label,
@@ -930,12 +919,7 @@ class _PlayerProfilePageState extends State<PlayerProfilePage> {
       decoration: BoxDecoration(
         border: isLast
             ? null
-            : Border(
-                bottom: BorderSide(
-                  color: Colors.white.withOpacity(0.08),
-                  width: 1,
-                ),
-              ),
+            : Border(bottom: BorderSide(color: Colors.white.withOpacity(0.08), width: 1)),
       ),
       padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
       child: Row(
@@ -957,10 +941,7 @@ class _PlayerProfilePageState extends State<PlayerProfilePage> {
               children: [
                 Text(
                   label,
-                  style: GoogleFonts.poppins(
-                    color: Colors.white70,
-                    fontSize: 12,
-                  ),
+                  style: GoogleFonts.poppins(color: Colors.white70, fontSize: 12),
                 ),
                 const SizedBox(height: 4),
                 Text(
@@ -995,10 +976,7 @@ class _PlayerProfilePageState extends State<PlayerProfilePage> {
         decoration: BoxDecoration(
           color: color.withOpacity(0.1),
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: color.withOpacity(0.2),
-            width: 1,
-          ),
+          border: Border.all(color: color.withOpacity(0.2), width: 1),
         ),
         child: Row(
           children: [
@@ -1027,19 +1005,12 @@ class _PlayerProfilePageState extends State<PlayerProfilePage> {
                   const SizedBox(height: 4),
                   Text(
                     description,
-                    style: GoogleFonts.poppins(
-                      color: Colors.white70,
-                      fontSize: 12,
-                    ),
+                    style: GoogleFonts.poppins(color: Colors.white70, fontSize: 12),
                   ),
                 ],
               ),
             ),
-            Icon(
-              Icons.chevron_right,
-              color: Colors.white.withOpacity(0.5),
-              size: 24,
-            ),
+            Icon(Icons.chevron_right, color: Colors.white.withOpacity(0.5), size: 24),
           ],
         ),
       ),
@@ -1061,24 +1032,93 @@ class _PlayerProfilePageState extends State<PlayerProfilePage> {
     );
   }
 
-  void _showDeleteAccountConfirmationDialog(String uid) {
+  void _showLogoutConfirmationDialog() {
     showDialog(
       context: context,
       builder: (context) => Dialog(
         backgroundColor: const Color(0xFF1E293B),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(24),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
         child: Padding(
           padding: const EdgeInsets.all(24),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(
-                Icons.warning_amber_rounded,
-                size: 48,
-                color: Colors.amber,
+              const Icon(Icons.logout, size: 48, color: Colors.white70),
+              const SizedBox(height: 16),
+              Text(
+                'Log Out?',
+                style: GoogleFonts.poppins(
+                  color: Colors.white,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
+              const SizedBox(height: 8),
+              Text(
+                'Are you sure you want to log out of your account?',
+                style: GoogleFonts.poppins(color: Colors.white70, fontSize: 14),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 24),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.pop(context),
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        side: BorderSide(color: Colors.white.withOpacity(0.2)),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                      child: Text(
+                        'Cancel',
+                        style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.w500),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: () {
+                        context.read<AuthBloc>().add(AuthLogoutEvent());
+                        Navigator.pop(context);
+                        _showToast('Logged out successfully', ToastificationType.success);
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFFDC2626),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                      child: Text(
+                        'Log Out',
+                        style: GoogleFonts.poppins(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showDeleteAccountConfirmationDialog(String uid) {
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        backgroundColor: const Color(0xFF1E293B),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.warning_amber_rounded, size: 48, color: Colors.amber),
               const SizedBox(height: 16),
               Text(
                 'Delete Account?',
@@ -1091,10 +1131,7 @@ class _PlayerProfilePageState extends State<PlayerProfilePage> {
               const SizedBox(height: 8),
               Text(
                 'This will permanently delete your account and all associated data. This action cannot be undone.',
-                style: GoogleFonts.poppins(
-                  color: Colors.white70,
-                  fontSize: 14,
-                ),
+                style: GoogleFonts.poppins(color: Colors.white70, fontSize: 14),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 24),
@@ -1106,16 +1143,11 @@ class _PlayerProfilePageState extends State<PlayerProfilePage> {
                       style: OutlinedButton.styleFrom(
                         padding: const EdgeInsets.symmetric(vertical: 14),
                         side: BorderSide(color: Colors.white.withOpacity(0.2)),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       ),
                       child: Text(
                         'Cancel',
-                        style: GoogleFonts.poppins(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w500,
-                        ),
+                        style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.w500),
                       ),
                     ),
                   ),
@@ -1129,9 +1161,7 @@ class _PlayerProfilePageState extends State<PlayerProfilePage> {
                       style: ElevatedButton.styleFrom(
                         backgroundColor: const Color(0xFFDC2626),
                         padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       ),
                       child: Text(
                         'Delete',
@@ -1160,7 +1190,6 @@ class _PlayerProfilePageState extends State<PlayerProfilePage> {
           _showToast('Authentication required', ToastificationType.error);
           return;
         }
-
         await user.reauthenticateWithCredential(credential);
         await FirebaseFirestore.instance.collection('users').doc(uid).delete();
         await user.delete();
@@ -1186,9 +1215,7 @@ class _PlayerProfilePageState extends State<PlayerProfilePage> {
       barrierDismissible: false,
       builder: (context) => Dialog(
         backgroundColor: const Color(0xFF1E293B),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(24),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
         child: Padding(
           padding: const EdgeInsets.all(24),
           child: Column(
@@ -1205,10 +1232,7 @@ class _PlayerProfilePageState extends State<PlayerProfilePage> {
               const SizedBox(height: 16),
               Text(
                 'For security, please enter your credentials to continue',
-                style: GoogleFonts.poppins(
-                  color: Colors.white70,
-                  fontSize: 14,
-                ),
+                style: GoogleFonts.poppins(color: Colors.white70, fontSize: 14),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 24),
@@ -1278,9 +1302,7 @@ class _PlayerProfilePageState extends State<PlayerProfilePage> {
                     style: ElevatedButton.styleFrom(
                       backgroundColor: const Color(0xFF4F46E5),
                       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                     ),
                     child: Text(
                       'Continue',
@@ -1316,9 +1338,7 @@ class _PlayerProfilePageState extends State<PlayerProfilePage> {
           if (state is AuthInitial || state is AuthLoading) {
             return const Scaffold(
               backgroundColor: Color(0xFF0F172A),
-              body: Center(
-                child: CircularProgressIndicator(color: Colors.white),
-              ),
+              body: Center(child: CircularProgressIndicator(color: Colors.white)),
             );
           }
 
@@ -1331,6 +1351,7 @@ class _PlayerProfilePageState extends State<PlayerProfilePage> {
               _lastNameController.text = appUser.lastName;
               _emailController.text = appUser.email ?? user.email ?? '';
               _phoneController.text = appUser.phone ?? user.phoneNumber ?? '';
+              _originalPhoneNumber = _phoneController.text;
               _genderController.text = appUser.gender ?? _genderOptions[0];
               _profileImageUrl = appUser.profileImage ?? 'assets/profile/default_avatar.png';
             }
@@ -1342,10 +1363,7 @@ class _PlayerProfilePageState extends State<PlayerProfilePage> {
                 elevation: 0,
                 title: Text(
                   'My Profile',
-                  style: GoogleFonts.poppins(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                  ),
+                  style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold),
                 ),
                 actions: [
                   IconButton(
@@ -1375,9 +1393,7 @@ class _PlayerProfilePageState extends State<PlayerProfilePage> {
                                 title: Text(
                                   _isEditing ? 'Cancel Edit' : 'Edit Profile',
                                   style: GoogleFonts.poppins(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.w500,
-                                  ),
+                                      color: Colors.white, fontWeight: FontWeight.w500),
                                 ),
                                 onTap: () {
                                   Navigator.pop(context);
@@ -1389,9 +1405,7 @@ class _PlayerProfilePageState extends State<PlayerProfilePage> {
                                 title: Text(
                                   'Change Avatar',
                                   style: GoogleFonts.poppins(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.w500,
-                                  ),
+                                      color: Colors.white, fontWeight: FontWeight.w500),
                                 ),
                                 onTap: () {
                                   Navigator.pop(context);
@@ -1404,9 +1418,7 @@ class _PlayerProfilePageState extends State<PlayerProfilePage> {
                                   title: Text(
                                     'Refresh Stats',
                                     style: GoogleFonts.poppins(
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.w500,
-                                    ),
+                                        color: Colors.white, fontWeight: FontWeight.w500),
                                   ),
                                   onTap: () {
                                     Navigator.pop(context);
@@ -1418,10 +1430,7 @@ class _PlayerProfilePageState extends State<PlayerProfilePage> {
                                 onPressed: () => Navigator.pop(context),
                                 child: Text(
                                   'Cancel',
-                                  style: GoogleFonts.poppins(
-                                    color: Colors.white70,
-                                    fontSize: 16,
-                                  ),
+                                  style: GoogleFonts.poppins(color: Colors.white70, fontSize: 16),
                                 ),
                               ),
                             ],
@@ -1438,332 +1447,7 @@ class _PlayerProfilePageState extends State<PlayerProfilePage> {
 
           return const Scaffold(
             backgroundColor: Color(0xFF0F172A),
-            body: Center(
-              child: CircularProgressIndicator(color: Colors.white),
-            ),
-          );
-        },
-      ),
-    );
-  }
-}
-class UmpiredMatchesPage extends StatefulWidget {
-  final String userId;
-
-  const UmpiredMatchesPage({super.key, required this.userId});
-
-  @override
-  State<UmpiredMatchesPage> createState() => _UmpiredMatchesPageState();
-}
-
-class _UmpiredMatchesPageState extends State<UmpiredMatchesPage> {
-  late Stream<QuerySnapshot> _tournamentsStream;
-  final currentUserEmail = FirebaseAuth.instance.currentUser?.email?.toLowerCase();
-
-  @override
-  void initState() {
-    super.initState();
-    _tournamentsStream = FirebaseFirestore.instance
-        .collection('tournaments')
-        .where('matches', isNotEqualTo: [])
-        .snapshots();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFF0F172A),
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Colors.white),
-          onPressed: () => Navigator.pop(context),
-        ),
-        title: Text(
-          'Umpired Matches',
-          style: GoogleFonts.poppins(
-            color: Colors.white,
-            fontSize: 20,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-      ),
-      body: StreamBuilder<QuerySnapshot>(
-        stream: _tournamentsStream,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(
-              child: CircularProgressIndicator(color: Colors.white),
-            );
-          }
-          if (snapshot.hasError) {
-            return Center(
-              child: Text(
-                'Error loading matches',
-                style: GoogleFonts.poppins(color: Colors.white70),
-              ),
-            );
-          }
-          if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-            return Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(Icons.gavel, size: 48, color: Colors.white70),
-                  const SizedBox(height: 16),
-                  Text(
-                    'No umpired matches',
-                    style: GoogleFonts.poppins(
-                      color: Colors.white,
-                      fontSize: 18,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'You have not been assigned as umpire for any matches',
-                    style: GoogleFonts.poppins(
-                      color: Colors.white70,
-                      fontSize: 14,
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                ],
-              ),
-            );
-          }
-
-          final umpiredMatches = <Map<String, dynamic>>[];
-          for (var tournamentDoc in snapshot.data!.docs) {
-            final tournamentData = tournamentDoc.data() as Map<String, dynamic>;
-            final matches = List<Map<String, dynamic>>.from(tournamentData['matches'] ?? []);
-
-            for (var i = 0; i < matches.length; i++) {
-              final match = matches[i];
-              if (match.containsKey('umpire')) {
-                final umpireData = match['umpire'] as Map<String, dynamic>?;
-                final umpireEmail = umpireData?['email'] as String?;
-
-                if (umpireEmail != null && umpireEmail.isNotEmpty && umpireEmail.toLowerCase() == currentUserEmail) {
-                  umpiredMatches.add({
-                    ...match,
-                    'tournamentId': tournamentDoc.id,
-                    'matchIndex': i,
-                    'tournamentName': tournamentData['name'] ?? 'Unnamed Tournament',
-                    'gameFormat': tournamentData['gameFormat'] ?? 'Unknown Format',
-                  });
-                }
-              }
-            }
-          }
-
-          if (umpiredMatches.isEmpty) {
-            return Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(Icons.gavel, size: 48, color: Colors.white70),
-                  const SizedBox(height: 16),
-                  Text(
-                    'No umpired matches',
-                    style: GoogleFonts.poppins(
-                      color: Colors.white,
-                      fontSize: 18,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'You have not been assigned as umpire for any matches',
-                    style: GoogleFonts.poppins(
-                      color: Colors.white70,
-                      fontSize: 14,
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                ],
-              ),
-            );
-          }
-
-          return ListView.builder(
-            padding: const EdgeInsets.all(16),
-            itemCount: umpiredMatches.length,
-            itemBuilder: (context, index) {
-              final match = umpiredMatches[index];
-              final isDoubles = match['gameFormat']?.toString().toLowerCase().contains('doubles') ?? false;
-              final team1 = isDoubles
-                  ? (match['team1'] as List<dynamic>?)?.join(' & ') ?? 'Team 1'
-                  : match['player1'] ?? 'Player 1';
-              final team2 = isDoubles
-                  ? (match['team2'] as List<dynamic>?)?.join(' & ') ?? 'Team 2'
-                  : match['player2'] ?? 'Player 2';
-              final isCompleted = match['completed'] ?? false;
-              final isLive = match['liveScores']?['isLive'] ?? false;
-              final currentGame = match['liveScores']?['currentGame'] ?? 1;
-              final team1Scores = List<int>.from(
-                  match['liveScores']?[isDoubles ? 'team1' : 'player1'] ?? [0, 0, 0]);
-              final team2Scores = List<int>.from(
-                  match['liveScores']?[isDoubles ? 'team2' : 'player2'] ?? [0, 0, 0]);
-              final startTime = match['startTime'] as Timestamp?;
-              final tournamentName = match['tournamentName'];
-              final gameFormat = match['gameFormat'];
-              final round = match['round'] ?? 1;
-
-              return Container(
-                margin: const EdgeInsets.only(bottom: 16),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF1E293B),
-                  borderRadius: BorderRadius.circular(16),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.2),
-                      blurRadius: 10,
-                      offset: const Offset(0, 4),
-                    ),
-                  ],
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Flexible(
-                            child: Text(
-                              tournamentName,
-                              style: GoogleFonts.poppins(
-                                color: Colors.white70,
-                                fontSize: 14,
-                              ),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                          Text(
-                            'Round $round',
-                            style: GoogleFonts.poppins(
-                              color: Colors.white70,
-                              fontSize: 14,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      Text(
-                        '$team1 vs $team2',
-                        style: GoogleFonts.poppins(
-                          color: Colors.white,
-                          fontSize: 18,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        gameFormat,
-                        style: GoogleFonts.poppins(
-                          color: Colors.white60,
-                          fontSize: 12,
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 12, vertical: 6),
-                            decoration: BoxDecoration(
-                              color: isCompleted
-                                  ? Colors.greenAccent.withOpacity(0.2)
-                                  : isLive
-                                      ? Colors.amberAccent.withOpacity(0.2)
-                                      : Colors.cyanAccent.withOpacity(0.2),
-                              borderRadius: BorderRadius.circular(20),
-                              border: Border.all(
-                                color: isCompleted
-                                    ? Colors.greenAccent
-                                    : isLive
-                                        ? Colors.amberAccent
-                                        : Colors.cyanAccent,
-                                width: 1,
-                              ),
-                            ),
-                            child: Text(
-                              isCompleted
-                                  ? 'Completed'
-                                  : isLive
-                                      ? 'In Progress'
-                                      : 'Scheduled',
-                              style: GoogleFonts.poppins(
-                                color: isCompleted
-                                    ? Colors.greenAccent
-                                    : isLive
-                                        ? Colors.amberAccent
-                                        : Colors.cyanAccent,
-                                fontSize: 12,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ),
-                          const Spacer(),
-                          const Icon(Icons.gavel, size: 20, color: Colors.white70),
-                        ],
-                      ),
-                      if (startTime != null) ...[
-                        const SizedBox(height: 12),
-                        Row(
-                          children: [
-                            const Icon(Icons.schedule, size: 16, color: Colors.white70),
-                            const SizedBox(width: 8),
-                            Text(
-                              DateFormat('MMM d, y • h:mm a').format(startTime.toDate()),
-                              style: GoogleFonts.poppins(
-                                color: Colors.white70,
-                                fontSize: 14,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                      if (isLive) ...[
-                        const SizedBox(height: 12),
-                        Row(
-                          children: [
-                            const Icon(Icons.scoreboard, size: 16, color: Colors.amberAccent),
-                            const SizedBox(width: 8),
-                            Text(
-                              'Score: ${team1Scores[currentGame - 1]} - ${team2Scores[currentGame - 1]}',
-                              style: GoogleFonts.poppins(
-                                color: Colors.amberAccent,
-                                fontSize: 14,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                      if (isCompleted && match['winner'] != null) ...[
-                        const SizedBox(height: 12),
-                        Row(
-                          children: [
-                            const Icon(Icons.emoji_events, size: 16, color: Colors.greenAccent),
-                            const SizedBox(width: 8),
-                            Text(
-                              'Winner: ${match['winner'] == (isDoubles ? 'team1' : 'player1') ? team1 : team2}',
-                              style: GoogleFonts.poppins(
-                                color: Colors.greenAccent,
-                                fontSize: 14,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-              );
-            },
+            body: Center(child: CircularProgressIndicator(color: Colors.white)),
           );
         },
       ),

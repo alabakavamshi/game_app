@@ -92,7 +92,7 @@ class SplashScreen extends StatelessWidget {
               right: 0,
               child: Center(
                 child: Text(
-                  'v1.0.0',
+                  'v2.0.0',
                   style: GoogleFonts.poppins(
                     color: Colors.white54,
                     fontSize: 12,

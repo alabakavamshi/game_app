@@ -11,16 +11,21 @@ import 'package:game_app/player_pages/match_history_page.dart';
 import 'package:game_app/screens/play_page.dart';
 import 'package:game_app/screens/player_profile.dart';
 import 'package:game_app/player_pages/player_stats.dart';
+import 'package:game_app/tournaments/match_details_page.dart';
 import 'package:geocoding/geocoding.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 import 'package:toastification/toastification.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:timezone/timezone.dart' as tz;
+import 'package:timezone/data/latest.dart' as tz;
 
 extension StringExtension on String {
   String capitalize() {
-    return isNotEmpty ? '${this[0].toUpperCase()}${substring(1).toLowerCase()}' : this;
+    return isNotEmpty
+        ? '${this[0].toUpperCase()}${substring(1).toLowerCase()}'
+        : this;
   }
 }
 
@@ -31,7 +36,8 @@ class PlayerHomePage extends StatefulWidget {
   State<PlayerHomePage> createState() => _PlayerHomePageState();
 }
 
-class _PlayerHomePageState extends State<PlayerHomePage> with SingleTickerProviderStateMixin {
+class _PlayerHomePageState extends State<PlayerHomePage>
+    with SingleTickerProviderStateMixin {
   int _selectedIndex = 0;
   String _location = 'Hyderabad, India';
   String _userCity = 'hyderabad';
@@ -47,10 +53,14 @@ class _PlayerHomePageState extends State<PlayerHomePage> with SingleTickerProvid
   AnimationController? _animationController;
   Animation<double>? _scaleAnimation;
   Animation<double>? _fadeAnimation;
+  final _scrollController = ScrollController();
+  bool _showCompletedMatches = false;
+  bool _showAllUpcomingMatches = false;
 
   @override
   void initState() {
     super.initState();
+    tz.initializeTimeZones(); // Initialize timezone data
     _initializeAnimations();
     _initializeUserData();
 
@@ -76,7 +86,10 @@ class _PlayerHomePageState extends State<PlayerHomePage> with SingleTickerProvid
       duration: const Duration(milliseconds: 500),
     );
     _scaleAnimation = Tween<double>(begin: 0.9, end: 1.0).animate(
-      CurvedAnimation(parent: _animationController!, curve: Curves.easeOutQuint),
+      CurvedAnimation(
+        parent: _animationController!,
+        curve: Curves.easeOutQuint,
+      ),
     );
     _fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
       CurvedAnimation(parent: _animationController!, curve: Curves.easeInOut),
@@ -88,7 +101,9 @@ class _PlayerHomePageState extends State<PlayerHomePage> with SingleTickerProvid
     final authState = context.read<AuthBloc>().state;
     if (authState is! AuthAuthenticated) return;
 
-    final userDocRef = FirebaseFirestore.instance.collection('users').doc(authState.user.uid);
+    final userDocRef = FirebaseFirestore.instance
+        .collection('users')
+        .doc(authState.user.uid);
     final userDoc = await userDocRef.get();
 
     final defaultUser = {
@@ -137,101 +152,104 @@ class _PlayerHomePageState extends State<PlayerHomePage> with SingleTickerProvid
     }
 
     final userId = authState.user.uid;
-    return FirebaseFirestore.instance
-        .collection('tournaments')
-        .snapshots()
-        .map((querySnapshot) {
-      List<Map<String, dynamic>> allMatches = [];
-      final now = DateTime.now();
+    return FirebaseFirestore.instance.collection('tournaments').snapshots().map(
+      (querySnapshot) {
+        List<Map<String, dynamic>> allMatches = [];
+        final now = tz.TZDateTime.now(tz.getLocation('Asia/Kolkata')); // Use IST as default
 
-      for (var doc in querySnapshot.docs) {
-        final data = doc.data();
-        final participants = data['participants'] as List<dynamic>? ?? [];
-        final isParticipant = participants.any((p) => p is Map<String, dynamic> && p['id'] == userId);
-        if (!isParticipant) continue;
+        for (var doc in querySnapshot.docs) {
+          final data = doc.data();
+          final participants = data['participants'] as List<dynamic>? ?? [];
+          final isParticipant = participants.any(
+            (p) => p is Map<String, dynamic> && p['id'] == userId,
+          );
+          if (!isParticipant) continue;
 
-        final matches = data['matches'] as List<dynamic>? ?? [];
-        for (var match in matches) {
+          final matches = data['matches'] as List<dynamic>? ?? [];
+          final tournamentTimezone = data['timezone']?.toString() ?? 'Asia/Kolkata';
+          tz.Location tzLocation;
           try {
-            final matchData = match as Map<String, dynamic>;
-            final player1Id = matchData['player1Id']?.toString() ?? '';
-            final player2Id = matchData['player2Id']?.toString() ?? '';
-            final team1Ids = List<String>.from(matchData['team1Ids'] ?? []);
-            final team2Ids = List<String>.from(matchData['team2Ids'] ?? []);
-            final isUserMatch = player1Id == userId ||
-                player2Id == userId ||
-                team1Ids.contains(userId) ||
-                team2Ids.contains(userId);
-
-            if (!isUserMatch) continue;
-
-            final matchStartTime = matchData['startTime'] != null
-                ? (matchData['startTime'] as Timestamp).toDate()
-                : (data['startDate'] as Timestamp).toDate();
-
-            final isLive = (matchData['liveScores'] as Map<String, dynamic>?)?['isLive'] == true;
-            final status = matchData['completed'] == true
-                ? 'COMPLETED'
-                : isLive
-                    ? 'LIVE'
-                    : matchStartTime.isAfter(now)
-                        ? 'SCHEDULED'
-                        : 'PAST';
-
-            allMatches.add({
-              'matchId': matchData['matchId']?.toString() ?? '',
-              'tournamentId': doc.id,
-              'tournamentName': data['name']?.toString() ?? 'Unnamed Tournament',
-              'player1': matchData['player1']?.toString() ?? 'Unknown',
-              'player2': matchData['player2']?.toString() ?? 'Unknown',
-              'player1Id': player1Id,
-              'player2Id': player2Id,
-              'team1': List<String>.from(matchData['team1'] ?? ['Unknown']),
-              'team2': List<String>.from(matchData['team2'] ?? ['Unknown']),
-              'team1Ids': team1Ids,
-              'team2Ids': team2Ids,
-              'completed': matchData['completed'] ?? false,
-              'round': matchData['round']?.toString() ?? '1',
-              'startTime': matchStartTime,
-              'isDoubles': matchData['team1Ids'] != null && matchData['team2Ids'] != null && matchData['team1Ids'].isNotEmpty && matchData['team2Ids'].isNotEmpty,
-              'liveScores': matchData['liveScores'] ?? {'isLive': false, 'currentGame': 1},
-              'location': (data['venue']?.toString().isNotEmpty == true && data['city']?.toString().isNotEmpty == true)
-                  ? '${data['venue']}, ${data['city']}'
-                  : data['city']?.toString() ?? 'Unknown',
-              'status': status,
-            });
+            tzLocation = tz.getLocation(tournamentTimezone);
           } catch (e) {
-            debugPrint('Error processing match in tournament ${doc.id}: $e');
+            debugPrint('Invalid timezone for tournament ${doc.id}: $tournamentTimezone, defaulting to Asia/Kolkata');
+            tzLocation = tz.getLocation('Asia/Kolkata');
+          }
+
+          for (var match in matches) {
+            try {
+              final matchData = match as Map<String, dynamic>;
+              final player1Id = matchData['player1Id']?.toString() ?? '';
+              final player2Id = matchData['player2Id']?.toString() ?? '';
+              final team1Ids = List<String>.from(matchData['team1Ids'] ?? []);
+              final team2Ids = List<String>.from(matchData['team2Ids'] ?? []);
+              final isUserMatch =
+                  player1Id == userId ||
+                  player2Id == userId ||
+                  team1Ids.contains(userId) ||
+                  team2Ids.contains(userId);
+
+              if (!isUserMatch) continue;
+
+              final matchStartTime = (matchData['startDate'] as Timestamp?)?.toDate() ??
+                  (data['startDate'] as Timestamp).toDate();
+              final matchStartTimeInTz = tz.TZDateTime.from(matchStartTime, tzLocation);
+
+              final isLive = (matchData['liveScores'] as Map<String, dynamic>?)?['isLive'] == true;
+              final status = matchData['completed'] == true
+                  ? 'COMPLETED'
+                  : isLive
+                      ? 'LIVE'
+                      : matchStartTimeInTz.isAfter(now)
+                          ? 'SCHEDULED'
+                          : 'PAST';
+
+              allMatches.add({
+                'matchId': matchData['matchId']?.toString() ?? '',
+                'tournamentId': doc.id,
+                'tournamentName': data['name']?.toString() ?? 'Unnamed Tournament',
+                'player1': matchData['player1']?.toString() ?? 'Unknown',
+                'player2': matchData['player2']?.toString() ?? 'Unknown',
+                'player1Id': player1Id,
+                'player2Id': player2Id,
+                'team1': List<String>.from(matchData['team1'] ?? ['Unknown']),
+                'team2': List<String>.from(matchData['team2'] ?? ['Unknown']),
+                'team1Ids': team1Ids,
+                'team2Ids': team2Ids,
+                'completed': matchData['completed'] ?? false,
+                'round': matchData['round']?.toString() ?? '1',
+                'startTime': matchStartTime, // Keep as DateTime for compatibility
+                'startTimeInTz': matchStartTimeInTz, // Add timezone-aware time
+                'timezone': tournamentTimezone,
+                'isDoubles': matchData['team1Ids'] != null &&
+                    matchData['team2Ids'] != null &&
+                    matchData['team1Ids'].isNotEmpty &&
+                    matchData['team2Ids'].isNotEmpty,
+                'liveScores': matchData['liveScores'] ?? {'isLive': false, 'currentGame': 1},
+                'location': (data['venue']?.toString().isNotEmpty == true &&
+                        data['city']?.toString().isNotEmpty == true)
+                    ? '${data['venue']}, ${data['city']}'
+                    : data['city']?.toString() ?? 'Unknown',
+                'status': status,
+              });
+            } catch (e) {
+              debugPrint('Error processing match in tournament ${doc.id}: $e');
+            }
           }
         }
-      }
 
-      allMatches.sort((a, b) => (a['startTime'] as DateTime).compareTo(b['startTime']));
-      return allMatches.take(5).toList();
-    });
-  }
-
-  Color _getMatchStatusColor(String status) {
-    switch (status.toUpperCase()) {
-      case 'SCHEDULED':
-        return const Color(0xFFF4A261); // Accent
-      case 'LIVE':
-        return const Color(0xFF2A9D8F); // Success
-      case 'PAST':
-        return const Color(0xFF757575); // Text Secondary
-      case 'COMPLETED':
-        return const Color(0xFFE9C46A); // Mood Booster
-      case 'CANCELLED':
-        return const Color(0xFFE76F51); // Error
-      default:
-        return const Color(0xFF757575); // Text Secondary
-    }
+        allMatches.sort(
+          (a, b) => (a['startTimeInTz'] as tz.TZDateTime).compareTo(b['startTimeInTz'] as tz.TZDateTime),
+        );
+        return allMatches.take(5).toList();
+      },
+    );
   }
 
   @override
   void dispose() {
     _locationController.dispose();
     _animationController?.dispose();
+    _scrollController.dispose();
     super.dispose();
   }
 
@@ -293,13 +311,19 @@ class _PlayerHomePageState extends State<PlayerHomePage> with SingleTickerProvid
         timeLimit: const Duration(seconds: 10),
       );
 
-      final placemarks = await placemarkFromCoordinates(position.latitude, position.longitude)
-          .timeout(const Duration(seconds: 5));
+      final placemarks = await placemarkFromCoordinates(
+        position.latitude,
+        position.longitude,
+      ).timeout(const Duration(seconds: 5));
 
       if (mounted) {
         setState(() {
-          _location = placemarks.isNotEmpty ? '${placemarks.first.locality ?? 'Hyderabad'}, India' : 'Hyderabad, India';
-          _userCity = placemarks.isNotEmpty ? placemarks.first.locality?.toLowerCase() ?? 'hyderabad' : 'hyderabad';
+          _location = placemarks.isNotEmpty
+              ? '${placemarks.first.locality ?? 'Hyderabad'}, India'
+              : 'Hyderabad, India';
+          _userCity = placemarks.isNotEmpty
+              ? placemarks.first.locality?.toLowerCase() ?? 'hyderabad'
+              : 'hyderabad';
           _showToast = true;
           _toastMessage = 'Location updated to $_location';
           _toastType = ToastificationType.success;
@@ -339,19 +363,27 @@ class _PlayerHomePageState extends State<PlayerHomePage> with SingleTickerProvid
     }
 
     try {
-      final locations = await locationFromAddress(query).timeout(const Duration(seconds: 5));
+      final locations = await locationFromAddress(
+        query,
+      ).timeout(const Duration(seconds: 5));
       if (locations.isEmpty) {
         throw Exception('No locations found');
       }
 
       final location = locations.first;
-      final placemarks = await placemarkFromCoordinates(location.latitude, location.longitude)
-          .timeout(const Duration(seconds: 3));
+      final placemarks = await placemarkFromCoordinates(
+        location.latitude,
+        location.longitude,
+      ).timeout(const Duration(seconds: 3));
 
       if (mounted) {
         setState(() {
-          _location = placemarks.isNotEmpty ? '${placemarks.first.locality ?? 'Hyderabad'}, India' : 'Hyderabad, India';
-          _userCity = placemarks.isNotEmpty ? placemarks.first.locality?.toLowerCase() ?? 'hyderabad' : 'hyderabad';
+          _location = placemarks.isNotEmpty
+              ? '${placemarks.first.locality ?? 'Hyderabad'}, India'
+              : 'Hyderabad, India';
+          _userCity = placemarks.isNotEmpty
+              ? placemarks.first.locality?.toLowerCase() ?? 'hyderabad'
+              : 'hyderabad';
           _showToast = true;
           _toastMessage = 'Location updated to $_location';
           _toastType = ToastificationType.success;
@@ -413,7 +445,10 @@ class _PlayerHomePageState extends State<PlayerHomePage> with SingleTickerProvid
                           ),
                         ),
                         IconButton(
-                          icon: const Icon(Icons.close, color: Color(0xFFA8DADC)), // Cool Blue Highlights
+                          icon: const Icon(
+                            Icons.close,
+                            color: Color(0xFFA8DADC),
+                          ), // Cool Blue Highlights
                           onPressed: () => Navigator.pop(context),
                         ),
                       ],
@@ -425,56 +460,90 @@ class _PlayerHomePageState extends State<PlayerHomePage> with SingleTickerProvid
                         await _getUserLocation();
                       },
                       child: Container(
-                        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+                        padding: const EdgeInsets.symmetric(
+                          vertical: 12,
+                          horizontal: 16,
+                        ),
                         decoration: BoxDecoration(
                           color: const Color(0xFFC1DADB).withOpacity(0.1), // Secondary
                           borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: const Color(0xFFC1DADB).withOpacity(0.5)),
+                          border: Border.all(
+                            color: const Color(0xFFC1DADB).withOpacity(0.5),
+                          ),
                         ),
                         child: Row(
                           children: [
-                            const Icon(Icons.my_location, color: Color(0xFFF4A261), size: 24), // Accent
+                            const Icon(
+                              Icons.my_location,
+                              color: Color(0xFFF4A261),
+                              size: 24,
+                            ), // Accent
                             const SizedBox(width: 12),
                             Text(
                               'Use Current Location',
-                              style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB), fontSize: 16), // Background
+                              style: GoogleFonts.poppins(
+                                color: const Color(0xFFFDFCFB),
+                                fontSize: 16,
+                              ), // Background
                             ),
                             const Spacer(),
                             if (_isLoadingLocation)
                               const SizedBox(
                                 width: 20,
                                 height: 20,
-                                child: CircularProgressIndicator(strokeWidth: 2, valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFF4A261))), // Accent
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  valueColor: AlwaysStoppedAnimation<Color>(
+                                    Color(0xFFF4A261),
+                                  ),
+                                ),
                               )
                             else
-                              const Icon(Icons.chevron_right, color: Color(0xFFA8DADC)), // Cool Blue Highlights
+                              const Icon(
+                                Icons.chevron_right,
+                                color: Color(0xFFA8DADC),
+                              ), // Cool Blue Highlights
                           ],
                         ),
                       ),
                     ),
                     const SizedBox(height: 16),
-                    Divider(color: const Color(0xFFA8DADC).withOpacity(0.2), height: 1), // Cool Blue Highlights
+                    Divider(
+                      color: const Color(0xFFA8DADC).withOpacity(0.2),
+                      height: 1,
+                    ), // Cool Blue Highlights
                     const SizedBox(height: 16),
                     Text(
                       'Or search for a location',
-                      style: GoogleFonts.poppins(color: const Color(0xFFA8DADC), fontSize: 14), // Cool Blue Highlights
+                      style: GoogleFonts.poppins(
+                        color: const Color(0xFFA8DADC),
+                        fontSize: 14,
+                      ), // Cool Blue Highlights
                     ),
                     const SizedBox(height: 12),
                     TextField(
                       controller: _locationController,
-                      style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB)), // Background
+                      style: GoogleFonts.poppins(
+                        color: const Color(0xFFFDFCFB),
+                      ), // Background
                       keyboardType: TextInputType.text,
                       decoration: InputDecoration(
                         hintText: 'Enter city name',
-                        hintStyle: GoogleFonts.poppins(color: const Color(0xFFA8DADC).withOpacity(0.7)), // Cool Blue Highlights
+                        hintStyle: GoogleFonts.poppins(
+                          color: const Color(0xFFA8DADC).withOpacity(0.7),
+                        ), // Cool Blue Highlights
                         filled: true,
                         fillColor: const Color(0xFFC1DADB).withOpacity(0.1), // Secondary
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(12),
-                          borderSide: BorderSide.none,
                         ),
-                        prefixIcon: const Icon(Icons.search, color: Color(0xFFA8DADC)), // Cool Blue Highlights
-                        contentPadding: const EdgeInsets.symmetric(vertical: 12),
+                        prefixIcon: const Icon(
+                          Icons.search,
+                          color: Color(0xFFA8DADC),
+                        ), // Cool Blue Highlights
+                        contentPadding: const EdgeInsets.symmetric(
+                          vertical: 12,
+                        ),
                       ),
                     ),
                     const SizedBox(height: 20),
@@ -486,11 +555,16 @@ class _PlayerHomePageState extends State<PlayerHomePage> with SingleTickerProvid
                             style: TextButton.styleFrom(
                               padding: const EdgeInsets.symmetric(vertical: 14),
                               backgroundColor: const Color(0xFFC1DADB).withOpacity(0.1), // Secondary
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
                             ),
                             child: Text(
                               'Cancel',
-                              style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB), fontWeight: FontWeight.w500), // Background
+                              style: GoogleFonts.poppins(
+                                color: const Color(0xFFFDFCFB),
+                                fontWeight: FontWeight.w500,
+                              ), // Background
                             ),
                           ),
                         ),
@@ -506,11 +580,16 @@ class _PlayerHomePageState extends State<PlayerHomePage> with SingleTickerProvid
                             style: ElevatedButton.styleFrom(
                               padding: const EdgeInsets.symmetric(vertical: 14),
                               backgroundColor: const Color(0xFF6C9A8B), // Primary
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
                             ),
                             child: Text(
                               'Search',
-                              style: GoogleFonts.poppins(fontWeight: FontWeight.w500, color: const Color(0xFFFDFCFB)), // Background
+                              style: GoogleFonts.poppins(
+                                fontWeight: FontWeight.w500,
+                                color: const Color(0xFFFDFCFB),
+                              ), // Background
                             ),
                           ),
                         ),
@@ -530,27 +609,39 @@ class _PlayerHomePageState extends State<PlayerHomePage> with SingleTickerProvid
     return StreamBuilder<Map<String, dynamic>?>(
       stream: _userDataStream(),
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting && _userData == null) {
-          return const Center(child: CircularProgressIndicator(valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFF4A261)))); // Accent
+        if (snapshot.connectionState == ConnectionState.waiting &&
+            _userData == null) {
+          return const Center(
+            child: CircularProgressIndicator(
+              valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFF4A261)),
+            ),
+          ); // Accent
         }
 
         if (snapshot.hasError) {
           return Center(
             child: Text(
               'Error loading user data',
-              style: GoogleFonts.poppins(color: const Color(0xFFE76F51)), // Error
+              style: GoogleFonts.poppins(
+                color: const Color(0xFFE76F51),
+              ), // Error
             ),
           );
         }
 
         _userData = snapshot.data ?? _userData;
         if (_userData == null) {
-          return const Center(child: CircularProgressIndicator(valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFF4A261)))); // Accent
+          return const Center(
+            child: CircularProgressIndicator(
+              valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFF4A261)),
+            ),
+          ); // Accent
         }
 
-        final displayName = _userData!['firstName']?.toString().isNotEmpty == true
-            ? '${StringExtension(_userData!['firstName'].toString()).capitalize()} ${_userData!['lastName']?.toString().isNotEmpty == true ? StringExtension(_userData!['lastName'].toString()).capitalize() : ''}'
-            : 'Player';
+        final displayName =
+            _userData!['firstName']?.toString().isNotEmpty == true
+                ? '${StringExtension(_userData!['firstName'].toString()).capitalize()} ${_userData!['lastName']?.toString().isNotEmpty == true ? StringExtension(_userData!['lastName'].toString()).capitalize() : ''}'
+                : 'Player';
 
         return Stack(
           children: [
@@ -598,7 +689,11 @@ class _PlayerHomePageState extends State<PlayerHomePage> with SingleTickerProvid
                             }
                             return Row(
                               children: [
-                                const Icon(Icons.sports_tennis, size: 16, color: Color(0xFFF4A261)), // Accent
+                                const Icon(
+                                  Icons.sports_tennis,
+                                  size: 16,
+                                  color: Color(0xFFF4A261),
+                                ), // Accent
                                 const SizedBox(width: 8),
                                 Text(
                                   '${_upcomingMatches.length} Upcoming Matches',
@@ -619,11 +714,12 @@ class _PlayerHomePageState extends State<PlayerHomePage> with SingleTickerProvid
                     child: CircleAvatar(
                       radius: 40,
                       backgroundColor: const Color(0xFFC1DADB).withOpacity(0.2), // Secondary
-                      backgroundImage: _userData!['profileImage']?.toString().isNotEmpty == true
-                          ? (_userData!['profileImage'].toString().startsWith('http')
-                              ? CachedNetworkImageProvider(_userData!['profileImage'])
-                              : AssetImage(_userData!['profileImage']) as ImageProvider)
-                          : const AssetImage('assets/default_profile.png') as ImageProvider,
+                      backgroundImage:
+                          _userData!['profileImage']?.toString().isNotEmpty == true
+                              ? (_userData!['profileImage'].toString().startsWith('http')
+                                  ? CachedNetworkImageProvider(_userData!['profileImage'])
+                                  : AssetImage(_userData!['profileImage']) as ImageProvider)
+                              : const AssetImage('assets/default_profile.png') as ImageProvider,
                     ),
                   ),
                 ],
@@ -640,7 +736,11 @@ class _PlayerHomePageState extends State<PlayerHomePage> with SingleTickerProvid
       stream: _upcomingMatchesStream(),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator(valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFF4A261)))); // Accent
+          return const Center(
+            child: CircularProgressIndicator(
+              valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFF4A261)),
+            ),
+          ); // Accent
         }
 
         if (snapshot.hasError) {
@@ -648,7 +748,9 @@ class _PlayerHomePageState extends State<PlayerHomePage> with SingleTickerProvid
           return Center(
             child: Text(
               'Error loading upcoming matches',
-              style: GoogleFonts.poppins(color: const Color(0xFFE76F51)), // Error
+              style: GoogleFonts.poppins(
+                color: const Color(0xFFE76F51),
+              ), // Error
             ),
           );
         }
@@ -684,10 +786,16 @@ class _PlayerHomePageState extends State<PlayerHomePage> with SingleTickerProvid
                   ),
                   Row(
                     children: [
-                      const Icon(Icons.sports_tennis, color: Color(0xFFF4A261)), // Accent
+                      const Icon(
+                        Icons.sports_tennis,
+                        color: Color(0xFFF4A261),
+                      ), // Accent
                       const SizedBox(width: 8),
                       IconButton(
-                        icon: const Icon(Icons.refresh, color: Color(0xFF757575)), // Text Secondary
+                        icon: const Icon(
+                          Icons.refresh,
+                          color: Color(0xFF757575),
+                        ), // Text Secondary
                         onPressed: _initializeUserData,
                         tooltip: 'Refresh Matches',
                       ),
@@ -727,12 +835,17 @@ class _PlayerHomePageState extends State<PlayerHomePage> with SingleTickerProvid
                 )
               else
                 ..._upcomingMatches.map((match) {
-                  final matchStartTime = match['startTime'] as DateTime;
+                  final matchStartTime = match['startTimeInTz'] as tz.TZDateTime;
                   final authState = context.read<AuthBloc>().state;
-                  final opponentName = authState is AuthAuthenticated && match['player1Id'] == authState.user.uid
-                      ? match['player2']
-                      : match['player1'];
+                  final opponentName =
+                      authState is AuthAuthenticated &&
+                              match['player1Id'] == authState.user.uid
+                          ? match['player2']
+                          : match['player1'];
                   final matchType = match['isDoubles'] ? 'Doubles' : 'Singles';
+                  final timezoneDisplay = match['timezone'] == 'Asia/Kolkata'
+                      ? 'IST'
+                      : match['timezone'];
 
                   return Container(
                     margin: const EdgeInsets.only(bottom: 12),
@@ -805,7 +918,11 @@ class _PlayerHomePageState extends State<PlayerHomePage> with SingleTickerProvid
                               const SizedBox(height: 4),
                               Row(
                                 children: [
-                                  const Icon(Icons.location_on, size: 14, color: Color(0xFF757575)), // Text Secondary
+                                  const Icon(
+                                    Icons.location_on,
+                                    size: 14,
+                                    color: Color(0xFF757575),
+                                  ), // Text Secondary
                                   const SizedBox(width: 4),
                                   Text(
                                     match['location'],
@@ -818,7 +935,7 @@ class _PlayerHomePageState extends State<PlayerHomePage> with SingleTickerProvid
                               ),
                               const SizedBox(height: 4),
                               Text(
-                                matchType,
+                                '$matchType • Time in $timezoneDisplay',
                                 style: GoogleFonts.poppins(
                                   color: const Color(0xFF757575), // Text Secondary
                                   fontSize: 12,
@@ -828,7 +945,10 @@ class _PlayerHomePageState extends State<PlayerHomePage> with SingleTickerProvid
                           ),
                         ),
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 4,
+                          ),
                           decoration: BoxDecoration(
                             color: _getMatchStatusColor(match['status']).withOpacity(0.2),
                             borderRadius: BorderRadius.circular(12),
@@ -928,6 +1048,555 @@ class _PlayerHomePageState extends State<PlayerHomePage> with SingleTickerProvid
     );
   }
 
+  Widget _buildRecentMatches() {
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('tournaments')
+          .where('status', isEqualTo: 'open')
+          .snapshots(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        if (snapshot.hasError) {
+          return Center(
+            child: Text('Error loading matches: ${snapshot.error}'),
+          );
+        }
+
+        List<Map<String, dynamic>> allMatches = [];
+        for (var tournamentDoc in snapshot.data!.docs) {
+          final tournamentData = tournamentDoc.data() as Map<String, dynamic>;
+          final matches = tournamentData['matches'] as List<dynamic>? ?? [];
+          final tournamentTimezone = tournamentData['timezone']?.toString() ?? 'Asia/Kolkata';
+          tz.Location tzLocation;
+          try {
+            tzLocation = tz.getLocation(tournamentTimezone);
+          } catch (e) {
+            debugPrint('Invalid timezone for tournament ${tournamentDoc.id}: $tournamentTimezone, defaulting to Asia/Kolkata');
+            tzLocation = tz.getLocation('Asia/Kolkata');
+          }
+
+          for (var match in matches) {
+            final matchData = match as Map<String, dynamic>;
+            final startTime = (matchData['startDate'] as Timestamp?)?.toDate() ??
+                (tournamentData['startDate'] as Timestamp).toDate();
+            final startTimeInTz = tz.TZDateTime.from(startTime, tzLocation);
+
+            allMatches.add({
+              ...matchData,
+              'tournamentId': tournamentDoc.id,
+              'tournamentName': tournamentData['name'] ?? 'Unnamed Tournament',
+              'location': tournamentData['city'] ?? 'Unknown',
+              'startTime': startTime, // Keep for compatibility
+              'startTimeInTz': startTimeInTz,
+              'timezone': tournamentTimezone,
+              'status': _getMatchStatus({
+                ...matchData,
+                'startTime': startTimeInTz,
+                'completed': matchData['completed'] ?? false,
+                'liveScores': matchData['liveScores'] ?? {'isLive': false},
+              }),
+            });
+          }
+        }
+
+        List<Map<String, dynamic>> liveMatches = allMatches.where((match) {
+          return match['status'] == 'LIVE';
+        }).toList();
+
+        List<Map<String, dynamic>> upcomingMatches = allMatches.where((match) {
+          return match['status'] == 'SCHEDULED';
+        }).toList()
+          ..sort((a, b) => (a['startTimeInTz'] as tz.TZDateTime).compareTo(b['startTimeInTz'] as tz.TZDateTime));
+
+        List<Map<String, dynamic>> completedMatches = allMatches.where((match) {
+          return match['status'] == 'COMPLETED';
+        }).toList()
+          ..sort((a, b) => (b['startTimeInTz'] as tz.TZDateTime).compareTo(a['startTimeInTz'] as tz.TZDateTime));
+
+        return Container(
+          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.1),
+                blurRadius: 10,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Recent Matches',
+                style: GoogleFonts.poppins(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: const Color(0xFF333333),
+                ),
+              ),
+              const SizedBox(height: 12),
+              if (liveMatches.isNotEmpty) ...[
+                Column(
+                  children: liveMatches.map((match) => _buildMatchCard(match)).toList(),
+                ),
+                const SizedBox(height: 16),
+              ],
+              if (upcomingMatches.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Text(
+                    'No upcoming matches scheduled',
+                    style: GoogleFonts.poppins(color: const Color(0xFF757575)),
+                  ),
+                )
+              else
+                Column(
+                  key: const ValueKey('upcoming_matches'),
+                  children: [
+                    ListView.builder(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      itemCount: _showAllUpcomingMatches
+                          ? upcomingMatches.length
+                          : (upcomingMatches.length > 5 ? 5 : upcomingMatches.length),
+                      itemBuilder: (context, index) => _buildMatchCard(upcomingMatches[index]),
+                    ),
+                    if (upcomingMatches.length > 5)
+                      GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: () {
+                          setState(() {
+                            _showAllUpcomingMatches = !_showAllUpcomingMatches;
+                          });
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 8),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Text(
+                                _showAllUpcomingMatches ? 'Show Less' : 'Show More',
+                                style: GoogleFonts.poppins(
+                                  color: const Color(0xFF6C9A8B),
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                              const SizedBox(width: 4),
+                              Icon(
+                                _showAllUpcomingMatches
+                                    ? Icons.keyboard_arrow_up
+                                    : Icons.keyboard_arrow_down,
+                                color: const Color(0xFF6C9A8B),
+                                size: 20,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              if (completedMatches.isNotEmpty) ...[
+                const SizedBox(height: 16),
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () {
+                    setState(() {
+                      _showCompletedMatches = !_showCompletedMatches;
+                    });
+                  },
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'Completed Matches',
+                        style: GoogleFonts.poppins(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: const Color(0xFF757575),
+                        ),
+                      ),
+                      Row(
+                        children: [
+                          Text(
+                            _showCompletedMatches ? 'Hide' : 'Show',
+                            style: GoogleFonts.poppins(
+                              color: const Color(0xFF6C9A8B),
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          Icon(
+                            _showCompletedMatches
+                                ? Icons.keyboard_arrow_up
+                                : Icons.keyboard_arrow_down,
+                            color: const Color(0xFF6C9A8B),
+                            size: 20,
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                if (_showCompletedMatches) ...[
+                  const SizedBox(height: 8),
+                  ListView.builder(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: completedMatches.length > 5 ? 5 : completedMatches.length,
+                    itemBuilder: (context, index) => _buildMatchCard(completedMatches[index]),
+                  ),
+                  if (completedMatches.length > 5)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Text(
+                        '${completedMatches.length - 5} more completed matches',
+                        style: GoogleFonts.poppins(
+                          color: const Color(0xFF757575),
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ],
+            ),
+          );
+        },
+      );
+  }
+
+  Widget _buildMatchCard(Map<String, dynamic> match) {
+    final status = match['status'] as String;
+    final isLive = status == 'LIVE';
+    final isCompleted = status == 'COMPLETED';
+    
+    final startTime = match['startTimeInTz'] as tz.TZDateTime;
+    final timezoneDisplay = match['timezone'] == 'Asia/Kolkata'
+        ? 'IST'
+        : match['timezone'];
+    final player1Name = match['player1'] as String? ?? 'Player 1';
+    final player2Name = match['player2'] as String? ?? 'Player 2';
+    final liveScores = match['liveScores'] as Map<String, dynamic>? ?? {};
+    final currentGame = liveScores['currentGame'] ?? 1;
+
+    final player1Scores = List<int>.from(liveScores['player1'] ?? [0, 0, 0]);
+    final player2Scores = List<int>.from(liveScores['player2'] ?? [0, 0, 0]);
+    final currentSetScore1 = player1Scores.length >= currentGame ? player1Scores[currentGame - 1] : 0;
+    final currentSetScore2 = player2Scores.length >= currentGame ? player2Scores[currentGame - 1] : 0;
+
+    int player1Sets = 0;
+    int player2Sets = 0;
+    for (int i = 0; i < player1Scores.length; i++) {
+      if ((player1Scores[i] >= 21 && (player1Scores[i] - player2Scores[i]) >= 2) || 
+          player1Scores[i] == 30) {
+        player1Sets++;
+      } else if ((player2Scores[i] >= 21 && (player2Scores[i] - player1Scores[i]) >= 2) || 
+                 player2Scores[i] == 30) {
+        player2Sets++;
+      }
+    }
+
+    final winnerId = match['winner'] as String?;
+    final player1Id = match['player1Id'] as String?;
+    final player2Id = match['player2Id'] as String?;
+    final isPlayer1Winner = winnerId == player1Id;
+    final isPlayer2Winner = winnerId == player2Id;
+
+    return GestureDetector(
+      onTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => MatchDetailsPage(
+              tournamentId: match['tournamentId'] as String,
+              match: match,
+              matchIndex: 0,
+              isCreator: false,
+              isDoubles: false,
+              isUmpire: false,
+              onDeleteMatch: () {},
+            ),
+          ),
+        );
+      },
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: isLive
+                ? const Color(0xFF2A9D8F)
+                : isCompleted
+                    ? const Color(0xFFE9C46A)
+                    : const Color(0xFFF4A261),
+            width: 1.5,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.1),
+              blurRadius: 6,
+              offset: const Offset(0, 3),
+            )
+          ],
+        ),
+        child: Column(
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+              decoration: BoxDecoration(
+                color: isLive
+                    ? const Color(0xFF2A9D8F).withOpacity(0.2)
+                    : isCompleted
+                        ? const Color(0xFFE9C46A).withOpacity(0.2)
+                        : const Color(0xFFF4A261).withOpacity(0.2),
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(12),
+                  topRight: Radius.circular(12),
+                ),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Flexible(
+                    child: Text(
+                      '${match['tournamentName'] as String} - Round ${match['round']}',
+                      style: GoogleFonts.poppins(
+                        fontWeight: FontWeight.w600,
+                        color: const Color(0xFF333333),
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4),
+                    decoration: BoxDecoration(
+                      color: _getMatchStatusColor(status),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      status,
+                      style: GoogleFonts.poppins(
+                        color: Colors.white,
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      Expanded(
+                        child: Column(
+                          children: [
+                            Text(
+                              player1Name,
+                              style: GoogleFonts.poppins(
+                                fontWeight: isPlayer1Winner
+                                    ? FontWeight.bold
+                                    : FontWeight.w600,
+                                fontSize: 14,
+                                color: isPlayer1Winner
+                                    ? const Color(0xFF2A9D8F)
+                                    : const Color(0xFF333333),
+                              ),
+                              textAlign: TextAlign.center,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            if (isCompleted || isLive) ...[
+                              const SizedBox(height: 4),
+                              Text(
+                                'Sets: $player1Sets',
+                                style: GoogleFonts.poppins(
+                                  fontSize: 12,
+                                  color: const Color(0xFF757575),
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                      Column(
+                        children: [
+                          Text(
+                            'VS',
+                            style: GoogleFonts.poppins(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              color: const Color(0xFF757575),
+                            ),
+                          ),
+                          if (isLive || isCompleted)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 4),
+                              child: Text(
+                                '$currentSetScore1-$currentSetScore2',
+                                style: GoogleFonts.poppins(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 18,
+                                  color: const Color(0xFF2A9D8F),
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                      Expanded(
+                        child: Column(
+                          children: [
+                            Text(
+                              player2Name,
+                              style: GoogleFonts.poppins(
+                                fontWeight: isPlayer2Winner
+                                    ? FontWeight.bold
+                                    : FontWeight.w600,
+                                fontSize: 14,
+                                color: isPlayer2Winner
+                                    ? const Color(0xFF2A9D8F)
+                                    : const Color(0xFF333333),
+                              ),
+                              textAlign: TextAlign.center,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            if (isCompleted || isLive) ...[
+                              const SizedBox(height: 4),
+                              Text(
+                                'Sets: $player2Sets',
+                                style: GoogleFonts.poppins(
+                                  fontSize: 12,
+                                  color: const Color(0xFF757575),
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (isCompleted)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Text(
+                        'Winner: ${isPlayer1Winner ? player1Name : player2Name}',
+                        style: GoogleFonts.poppins(
+                          fontWeight: FontWeight.bold,
+                          color: const Color(0xFF2A9D8F),
+                          fontStyle: FontStyle.italic,
+                        ),
+                      ),
+                    ),
+                  const SizedBox(height: 12),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(
+                            Icons.calendar_today,
+                            size: 16,
+                            color: Color(0xFF757575),
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            DateFormat('MMM dd').format(startTime),
+                            style: GoogleFonts.poppins(
+                              color: const Color(0xFF757575),
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                      Row(
+                        children: [
+                          const Icon(
+                            Icons.access_time,
+                            size: 16,
+                            color: Color(0xFF757575),
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            '${DateFormat('h:mm a').format(startTime)} $timezoneDisplay',
+                            style: GoogleFonts.poppins(
+                              color: const Color(0xFF757575),
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                      Row(
+                        children: [
+                          const Icon(
+                            Icons.location_on,
+                            size: 16,
+                            color: Color(0xFF757575),
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            match['location'] as String,
+                            style: GoogleFonts.poppins(
+                              color: const Color(0xFF757575),
+                              fontSize: 12,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                            maxLines: 1,
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _getMatchStatus(Map<String, dynamic> match) {
+    final now = tz.TZDateTime.now(tz.getLocation('Asia/Kolkata')); // Use IST as default
+    final startTime = match['startTime'] as tz.TZDateTime;
+    final isLive = (match['liveScores'] as Map<String, dynamic>)['isLive'] == true;
+    final isCompleted = match['completed'] == true;
+
+    if (isCompleted) {
+      return 'COMPLETED';
+    } else if (isLive) {
+      return 'LIVE';
+    } else if (startTime.isAfter(now)) {
+      return 'SCHEDULED';
+    } else {
+      return 'SCHEDULED';
+    }
+  }
+
+  Color _getMatchStatusColor(String status) {
+    switch (status) {
+      case 'LIVE':
+        return const Color(0xFF2A9D8F);
+      case 'COMPLETED':
+        return const Color(0xFFE9C46A);
+      case 'SCHEDULED':
+        return const Color(0xFFF4A261);
+      default:
+        return const Color(0xFF757575);
+    }
+  }
+
   Widget _buildQuickActionButton({
     required IconData icon,
     required String label,
@@ -950,7 +1619,10 @@ class _PlayerHomePageState extends State<PlayerHomePage> with SingleTickerProvid
           const SizedBox(height: 8),
           Text(
             label,
-            style: GoogleFonts.poppins(color: const Color(0xFF757575), fontSize: 12), // Text Secondary
+            style: GoogleFonts.poppins(
+              color: const Color(0xFF757575),
+              fontSize: 12,
+            ), // Text Secondary
           ),
         ],
       ),
@@ -967,7 +1639,9 @@ class _PlayerHomePageState extends State<PlayerHomePage> with SingleTickerProvid
           decoration: BoxDecoration(
             color: const Color(0xFF1D3557), // Deep Indigo
             borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: const Color(0xFFA8DADC).withOpacity(0.7)), // Cool Blue Highlights
+            border: Border.all(
+              color: const Color(0xFFA8DADC).withOpacity(0.7),
+            ), // Cool Blue Highlights
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -995,26 +1669,42 @@ class _PlayerHomePageState extends State<PlayerHomePage> with SingleTickerProvid
                   TextButton(
                     onPressed: () => Navigator.pop(context, false),
                     style: TextButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 10,
+                      ),
                       backgroundColor: const Color(0xFFC1DADB).withOpacity(0.1), // Secondary
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
                     ),
                     child: Text(
                       'Cancel',
-                      style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB), fontWeight: FontWeight.w500), // Background
+                      style: GoogleFonts.poppins(
+                        color: const Color(0xFFFDFCFB),
+                        fontWeight: FontWeight.w500,
+                      ), // Background
                     ),
                   ),
                   const SizedBox(width: 12),
                   ElevatedButton(
                     onPressed: () => Navigator.pop(context, true),
                     style: ElevatedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 10,
+                      ),
                       backgroundColor: const Color(0xFFE76F51), // Error
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
                     ),
                     child: Text(
                       'Logout',
-                      style: GoogleFonts.poppins(fontWeight: FontWeight.w500, color: const Color(0xFFFDFCFB)), // Background
+                      style: GoogleFonts.poppins(
+                        fontWeight: FontWeight.w500,
+                        color: const Color(0xFFFDFCFB),
+                      ), // Background
                     ),
                   ),
                 ],
@@ -1049,18 +1739,23 @@ class _PlayerHomePageState extends State<PlayerHomePage> with SingleTickerProvid
                 : _toastType == ToastificationType.error
                     ? 'Error'
                     : 'Info',
-            style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB)), // Background
+            style: GoogleFonts.poppins(
+              color: const Color(0xFFFDFCFB),
+            ), // Background
           ),
           description: Text(
             _toastMessage!,
-            style: GoogleFonts.poppins(color: const Color(0xFFFDFCFB)), // Background
+            style: GoogleFonts.poppins(
+              color: const Color(0xFFFDFCFB),
+            ), // Background
           ),
           autoCloseDuration: const Duration(seconds: 3),
-          backgroundColor: _toastType == ToastificationType.success
-              ? const Color(0xFF2A9D8F) // Success
-              : _toastType == ToastificationType.error
-                  ? const Color(0xFFE76F51) // Error
-                  : const Color(0xFFF4A261), // Accent
+          backgroundColor:
+              _toastType == ToastificationType.success
+                  ? const Color(0xFF2A9D8F) // Success
+                  : _toastType == ToastificationType.error
+                      ? const Color(0xFFE76F51) // Error
+                      : const Color(0xFFF4A261), // Accent
           foregroundColor: const Color(0xFFFDFCFB), // Background
           alignment: Alignment.bottomCenter,
         );
@@ -1100,7 +1795,11 @@ class _PlayerHomePageState extends State<PlayerHomePage> with SingleTickerProvid
           if (state is AuthLoading) {
             return const Scaffold(
               backgroundColor: Color(0xFFFDFCFB), // Background
-              body: Center(child: CircularProgressIndicator(valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFF4A261)))), // Accent
+              body: Center(
+                child: CircularProgressIndicator(
+                  valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFF4A261)),
+                ),
+              ), // Accent
             );
           }
 
@@ -1111,6 +1810,7 @@ class _PlayerHomePageState extends State<PlayerHomePage> with SingleTickerProvid
                   const SizedBox(height: 16),
                   _buildWelcomeCard(),
                   _buildQuickActions(),
+                  _buildRecentMatches(),
                   _buildUpcomingMatches(),
                   const SizedBox(height: 20),
                 ],
@@ -1136,7 +1836,7 @@ class _PlayerHomePageState extends State<PlayerHomePage> with SingleTickerProvid
                       toolbarHeight: 80,
                       flexibleSpace: Container(
                         decoration: const BoxDecoration(
-                          color: Color(0xFF6C9A8B)
+                          color: Color(0xFF6C9A8B),
                         ),
                       ),
                       title: Column(
@@ -1155,7 +1855,11 @@ class _PlayerHomePageState extends State<PlayerHomePage> with SingleTickerProvid
                             onTap: _showLocationSearchDialog,
                             child: Row(
                               children: [
-                                const Icon(Icons.location_pin, color: Color(0xFF757575), size: 18), // Text Secondary
+                                const Icon(
+                                  Icons.location_pin,
+                                  color: Color(0xFF757575),
+                                  size: 18,
+                                ), // Text Secondary
                                 const SizedBox(width: 8),
                                 _isLoadingLocation && !_locationFetchCompleted
                                     ? const SizedBox(
@@ -1163,7 +1867,9 @@ class _PlayerHomePageState extends State<PlayerHomePage> with SingleTickerProvid
                                         height: 16,
                                         child: CircularProgressIndicator(
                                           strokeWidth: 2,
-                                          valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFF4A261)), // Accent
+                                          valueColor: AlwaysStoppedAnimation<Color>(
+                                            Color(0xFFF4A261),
+                                          ), // Accent
                                         ),
                                       )
                                     : Flexible(
@@ -1176,7 +1882,11 @@ class _PlayerHomePageState extends State<PlayerHomePage> with SingleTickerProvid
                                           overflow: TextOverflow.ellipsis,
                                         ),
                                       ),
-                                const Icon(Icons.arrow_drop_down, color: Color(0xFF757575), size: 18), // Text Secondary
+                                const Icon(
+                                  Icons.arrow_drop_down,
+                                  color: Color(0xFF757575),
+                                  size: 18,
+                                ), // Text Secondary
                               ],
                             ),
                           ),
@@ -1184,7 +1894,10 @@ class _PlayerHomePageState extends State<PlayerHomePage> with SingleTickerProvid
                       ),
                       actions: [
                         IconButton(
-                          icon: const Icon(Icons.logout, color: Color(0xFF757575)), // Text Secondary
+                          icon: const Icon(
+                            Icons.logout,
+                            color: Color(0xFF757575),
+                          ), // Text Secondary
                           onPressed: () async {
                             final shouldLogout = await _showLogoutConfirmationDialog();
                             if (shouldLogout == true && mounted) {
@@ -1222,7 +1935,7 @@ class _PlayerHomePageState extends State<PlayerHomePage> with SingleTickerProvid
                   BottomNavigationBarItem(
                     icon: Icon(Icons.sports_tennis_outlined),
                     activeIcon: Icon(Icons.sports_tennis),
-                    label: 'Matches',
+                    label: 'Tournaments',
                   ),
                   BottomNavigationBarItem(
                     icon: Icon(Icons.person_outline),

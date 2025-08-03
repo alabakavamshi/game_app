@@ -39,10 +39,10 @@
               "client_type": 3
             },
             {
-              "client_id": "427126638951-pq2bdu18vk90mveummkb64guc0k2hqig.apps.googleusercontent.com",
+              "client_id": "427126638951-es7icvgb93edbfjfv1cucbd8b2rqmpc7.apps.googleusercontent.com",
               "client_type": 2,
               "ios_info": {
-                "bundle_id": "com.example.game"
+                "bundle_id": "com.smashlive.gameapp"
               }
             }
           ]
@@ -83,10 +83,10 @@
               "client_type": 3
             },
             {
-              "client_id": "427126638951-pq2bdu18vk90mveummkb64guc0k2hqig.apps.googleusercontent.com",
+              "client_id": "427126638951-es7icvgb93edbfjfv1cucbd8b2rqmpc7.apps.googleusercontent.com",
               "client_type": 2,
               "ios_info": {
-                "bundle_id": "com.example.game"
+                "bundle_id": "com.smashlive.gameapp"
               }
             }
           ]
@@ -119,10 +119,54 @@
               "client_type": 3
             },
             {
-              "client_id": "427126638951-pq2bdu18vk90mveummkb64guc0k2hqig.apps.googleusercontent.com",
+              "client_id": "427126638951-es7icvgb93edbfjfv1cucbd8b2rqmpc7.apps.googleusercontent.com",
               "client_type": 2,
               "ios_info": {
-                "bundle_id": "com.example.game"
+                "bundle_id": "com.smashlive.gameapp"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:427126638951:android:32a971da9f314fc0ca47c2",
+        "android_client_info": {
+          "package_name": "com.smashlive.game_app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "427126638951-34n49boh1bd066msrdi59mqluduvm5qe.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.smashlive.game_app",
+            "certificate_hash": "38ccf6e37ad6c26f53a7701ab45eed8decb7e55a"
+          }
+        },
+        {
+          "client_id": "427126638951-3ofv1odq0e660lge9n2f8n8de8uj4u69.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDMPRkvSHRjQSxOirhf2Az0KZuFdtZfB5U"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "427126638951-3ofv1odq0e660lge9n2f8n8de8uj4u69.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "427126638951-es7icvgb93edbfjfv1cucbd8b2rqmpc7.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.smashlive.gameapp"
               }
             }
           ]

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:game_app/models/tournament.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
+import 'package:timezone/timezone.dart' as tz;
 
 class TournamentCard extends StatelessWidget {
   final Tournament tournament;
@@ -19,7 +20,7 @@ class TournamentCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final startTime = tournament.startTime;
+    final startTime = tournament.getStartTime();
     final participantsText = '${tournament.participants.length}/${tournament.maxParticipants}';
 
     return Container(
@@ -43,7 +44,6 @@ class TournamentCard extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
             child: Row(
               children: [
-               
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
@@ -137,8 +137,8 @@ class TournamentCard extends StatelessWidget {
                 _buildDetailRow(
                   icon: Icons.calendar_today,
                   text: tournament.endDate != null
-                      ? '${DateFormat('MMM dd, yyyy').format(tournament.startDate)} - ${DateFormat('MMM dd, yyyy').format(tournament.endDate!)} • ${startTime.format(context)}'
-                      : '${DateFormat('MMM dd, yyyy').format(tournament.startDate)} • ${startTime.format(context)}',
+                      ? '${DateFormat('MMM dd, yyyy').format(tz.TZDateTime.from(tournament.startDate, tz.getLocation(tournament.timezone)))} - ${DateFormat('MMM dd, yyyy').format(tz.TZDateTime.from(tournament.endDate!, tz.getLocation(tournament.timezone)))} • ${startTime.format(context)} (${tournament.timezone})'
+                      : '${DateFormat('MMM dd, yyyy').format(tz.TZDateTime.from(tournament.startDate, tz.getLocation(tournament.timezone)))} • ${startTime.format(context)} (${tournament.timezone})',
                 ),
               ],
             ),

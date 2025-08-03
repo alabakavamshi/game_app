@@ -3,9 +3,9 @@
 <plist version="1.0">
 <dict>
 	<key>CLIENT_ID</key>
-	<string>427126638951-qpgrpu4f76jg8u9lsk6o464osb6ft7gm.apps.googleusercontent.com</string>
+	<string>427126638951-es7icvgb93edbfjfv1cucbd8b2rqmpc7.apps.googleusercontent.com</string>
 	<key>REVERSED_CLIENT_ID</key>
-	<string>com.googleusercontent.apps.427126638951-qpgrpu4f76jg8u9lsk6o464osb6ft7gm</string>
+	<string>com.googleusercontent.apps.427126638951-es7icvgb93edbfjfv1cucbd8b2rqmpc7</string>
 	<key>ANDROID_CLIENT_ID</key>
 	<string>427126638951-n7kagd2jue1da2hoq0q2l9h2ml0bf5vk.apps.googleusercontent.com</string>
 	<key>API_KEY</key>
@@ -15,7 +15,7 @@
 	<key>PLIST_VERSION</key>
 	<string>1</string>
 	<key>BUNDLE_ID</key>
-	<string>com.smashlive.gameApp</string>
+	<string>com.smashlive.gameapp</string>
 	<key>PROJECT_ID</key>
 	<string>game-39b8e</string>
 	<key>STORAGE_BUCKET</key>
@@ -31,6 +31,6 @@
 	<key>IS_SIGNIN_ENABLED</key>
 	<true></true>
 	<key>GOOGLE_APP_ID</key>
-	<string>1:427126638951:ios:5afcf6b7a3a11f04ca47c2</string>
+	<string>1:427126638951:ios:7977bab9dcc719bbca47c2</string>
 </dict>
 </plist>

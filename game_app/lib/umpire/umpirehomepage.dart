@@ -39,8 +39,6 @@ class _UmpireHomePageState extends State<UmpireHomePage> with SingleTickerProvid
   int _selectedIndex = 0;
   String _location = 'Hyderabad, India';
   String _userCity = 'hyderabad';
-  bool _isLoadingLocation = false;
-  bool _locationFetchCompleted = false;
   Position? _lastPosition;
   final TextEditingController _locationController = TextEditingController();
   AnimationController? _animationController;
@@ -68,8 +66,6 @@ class _UmpireHomePageState extends State<UmpireHomePage> with SingleTickerProvid
               setState(() {
                 _userCity = userDoc.data()!['city'].toString().toLowerCase();
                 _location = '${StringExtension(_userCity).capitalize()}, India';
-                _locationFetchCompleted = true;
-                _isLoadingLocation = false;
               });
             }
           } else if (!kIsWeb) {
@@ -79,8 +75,6 @@ class _UmpireHomePageState extends State<UmpireHomePage> with SingleTickerProvid
               setState(() {
                 _location = 'Hyderabad, India';
                 _userCity = 'hyderabad';
-                _locationFetchCompleted = true;
-                _isLoadingLocation = false;
               });
             }
           }
@@ -298,8 +292,6 @@ class _UmpireHomePageState extends State<UmpireHomePage> with SingleTickerProvid
     if (!mounted || kIsWeb) return;
 
     setState(() {
-      _isLoadingLocation = true;
-      _locationFetchCompleted = false;
     });
 
     try {
@@ -382,8 +374,6 @@ class _UmpireHomePageState extends State<UmpireHomePage> with SingleTickerProvid
     } finally {
       if (mounted) {
         setState(() {
-          _isLoadingLocation = false;
-          _locationFetchCompleted = true;
         });
       }
     }
@@ -496,158 +486,7 @@ class _UmpireHomePageState extends State<UmpireHomePage> with SingleTickerProvid
     }
   }
 
-  Future<void> _getUserLocationFromCurrent() async {
-    if (!mounted || kIsWeb) return;
 
-    setState(() {
-      _isLoadingLocation = true;
-      _locationFetchCompleted = false;
-    });
-
-    try {
-      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) {
-        await _handleLocationServiceDisabled();
-        return;
-      }
-
-      LocationPermission permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-        if (permission == LocationPermission.denied) {
-          _showPermissionDeniedDialog();
-          return;
-        }
-      }
-
-      if (permission == LocationPermission.deniedForever) {
-        _showPermissionDeniedForeverDialog();
-        return;
-      }
-
-      Position? position;
-      bool success = false;
-      int attempts = 0;
-      const int maxAttempts = 3;
-
-      while (!success && attempts < maxAttempts) {
-        attempts++;
-        try {
-          position = await Geolocator.getCurrentPosition(
-            desiredAccuracy: LocationAccuracy.medium,
-            timeLimit: const Duration(seconds: 10),
-          );
-          success = true;
-        } on TimeoutException {
-          if (attempts == maxAttempts) {
-            throw TimeoutException('Location fetch timed out after $maxAttempts attempts');
-          }
-          await Future.delayed(const Duration(seconds: 1));
-        }
-      }
-
-      if (position != null) {
-        _lastPosition = position;
-        await _updateLocationFromPosition(position);
-      } else {
-        throw Exception('Failed to get location after $maxAttempts attempts');
-      }
-
-      final authState = context.read<AuthBloc>().state;
-      if (authState is AuthAuthenticated && mounted) {
-        await FirebaseFirestore.instance
-            .collection('users')
-            .doc(authState.user.uid)
-            .update({'city': _userCity});
-      }
-
-      if (mounted) {
-        setState(() {
-          _showToast = true;
-          _toastMessage = 'Location updated to $_location';
-          _toastType = ToastificationType.success;
-        });
-      }
-    } on TimeoutException {
-      _handleLocationTimeout();
-    } catch (e) {
-      _handleLocationError(e);
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isLoadingLocation = false;
-          _locationFetchCompleted = true;
-        });
-      }
-    }
-  }
-
-  Future<void> _searchLocation(String query) async {
-    if (!mounted) return;
-
-    if (query.isEmpty) {
-      if (mounted) {
-        setState(() {
-          _showToast = true;
-          _toastMessage = 'Please enter a location';
-          _toastType = ToastificationType.error;
-        });
-      }
-      return;
-    }
-
-    try {
-      final locations = await locationFromAddress(query).timeout(const Duration(seconds: 5));
-      if (locations.isEmpty) {
-        throw Exception('No locations found for "$query"');
-      }
-
-      final location = locations.first;
-      final placemarks = await placemarkFromCoordinates(
-        location.latitude,
-        location.longitude,
-      ).timeout(const Duration(seconds: 3));
-
-      if (placemarks.isEmpty) {
-        throw Exception('No placemarks found');
-      }
-
-      final place = placemarks.first;
-      if (mounted) {
-        setState(() {
-          _location = '${place.locality ?? 'Hyderabad'}, ${place.country ?? 'India'}';
-          _userCity = place.locality?.toLowerCase() ?? 'hyderabad';
-        });
-      }
-
-      final authState = context.read<AuthBloc>().state;
-      if (authState is AuthAuthenticated && mounted) {
-        await FirebaseFirestore.instance
-            .collection('users')
-            .doc(authState.user.uid)
-            .update({'city': _userCity});
-      }
-
-      if (mounted) {
-        setState(() {
-          _showToast = true;
-          _toastMessage = 'Location updated to $_location';
-          _toastType = ToastificationType.success;
-        });
-      }
-    } catch (e) {
-      debugPrint('Search location error: $e');
-      if (mounted) {
-        setState(() {
-          _location = 'Hyderabad, India';
-          _userCity = 'hyderabad';
-          _showToast = true;
-          _toastMessage = 'Failed to find location: ${e.toString()}. Using default: Hyderabad.';
-          _toastType = ToastificationType.error;
-        });
-      }
-    }
-  }
 
   Future<bool?> _showLogoutConfirmationDialog() {
     return showDialog<bool>(
@@ -1316,187 +1155,6 @@ class _UmpireHomePageState extends State<UmpireHomePage> with SingleTickerProvid
     );
   }
 
-  void _showLocationSearchDialog() {
-    _locationController.clear();
-    _animationController?.forward();
-
-    showDialog(
-      context: context,
-      builder: (context) {
-        Widget dialogContent = Container(
-          padding: const EdgeInsets.all(20),
-          decoration: BoxDecoration(
-            color: const Color(0xFF1D3557), // Deep Indigo
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.3),
-                blurRadius: 20,
-                spreadRadius: 5,
-              ),
-            ],
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    'Select Location',
-                    style: GoogleFonts.poppins(
-                      color: const Color(0xFFFDFCFB), // Background
-                      fontWeight: FontWeight.bold,
-                      fontSize: 18,
-                    ),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.close, color: Color(0xFFA8DADC)), // Cool Blue Highlights
-                    onPressed: () => Navigator.pop(context),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              GestureDetector(
-                onTap: () async {
-                  Navigator.pop(context);
-                  await _getUserLocationFromCurrent();
-                },
-                child: Container(
-                  padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFC1DADB).withOpacity(0.1), // Secondary
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: const Color(0xFFC1DADB).withOpacity(0.5)), // Secondary
-                  ),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.my_location, color: Color(0xFFF4A261), size: 24), // Accent
-                      const SizedBox(width: 12),
-                      Text(
-                        'Use Current Location',
-                        style: GoogleFonts.poppins(
-                          color: const Color(0xFFFDFCFB), // Background
-                          fontSize: 16,
-                        ),
-                      ),
-                      const Spacer(),
-                      if (_isLoadingLocation)
-                        const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFF4A261)), // Accent
-                          ),
-                        )
-                      else
-                        const Icon(Icons.chevron_right, color: Color(0xFFA8DADC)), // Cool Blue Highlights
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-              Divider(color: const Color(0xFFA8DADC).withOpacity(0.2), height: 1), // Cool Blue Highlights
-              const SizedBox(height: 16),
-              Text(
-                'Or search for a location',
-                style: GoogleFonts.poppins(
-                  color: const Color(0xFFA8DADC), // Cool Blue Highlights
-                  fontSize: 14,
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _locationController,
-                style: GoogleFonts.poppins(
-                  color: const Color(0xFFFDFCFB), // Background
-                ),
-                keyboardType: TextInputType.text,
-                decoration: InputDecoration(
-                  hintText: 'Enter city name',
-                  hintStyle: GoogleFonts.poppins(
-                    color: const Color(0xFFA8DADC).withOpacity(0.7), // Cool Blue Highlights
-                  ),
-                  filled: true,
-                  fillColor: const Color(0xFFC1DADB).withOpacity(0.1), // Secondary
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide.none,
-                  ),
-                  prefixIcon: const Icon(Icons.search, color: Color(0xFFA8DADC)), // Cool Blue Highlights
-                  contentPadding: const EdgeInsets.symmetric(vertical: 12),
-                ),
-              ),
-              const SizedBox(height: 20),
-              Row(
-                children: [
-                  Expanded(
-                    child: TextButton(
-                      onPressed: () => Navigator.pop(context),
-                      style: TextButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        backgroundColor: const Color(0xFFC1DADB).withOpacity(0.1), // Secondary
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      ),
-                      child: Text(
-                        'Cancel',
-                        style: GoogleFonts.poppins(
-                          color: const Color(0xFFFDFCFB), // Background
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: ElevatedButton(
-                      onPressed: () {
-                        if (_locationController.text.isNotEmpty) {
-                          _searchLocation(_locationController.text);
-                          Navigator.pop(context);
-                        }
-                      },
-                      style: ElevatedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        backgroundColor: const Color(0xFF6C9A8B), // Primary
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      ),
-                      child: Text(
-                        'Search',
-                        style: GoogleFonts.poppins(
-                          fontWeight: FontWeight.w500,
-                          color: const Color(0xFFFDFCFB), // Background
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        );
-
-        if (_scaleAnimation != null && _fadeAnimation != null) {
-          return Dialog(
-            backgroundColor: Colors.transparent,
-            child: ScaleTransition(
-              scale: _scaleAnimation!,
-              child: FadeTransition(
-                opacity: _fadeAnimation!,
-                child: dialogContent,
-              ),
-            ),
-          );
-        }
-        return Dialog(
-          backgroundColor: Colors.transparent,
-          child: dialogContent,
-        );
-      },
-    );
-  }
 
   void _onItemTapped(int index) {
     if (index < 0 || index >= 3) {
@@ -1612,7 +1270,7 @@ class _UmpireHomePageState extends State<UmpireHomePage> with SingleTickerProvid
             },
             child: Scaffold(
               backgroundColor: const Color(0xFFFDFCFB), // Background
-              appBar: _selectedIndex != 2
+              appBar: _selectedIndex == 0
                   ? AppBar(
                       elevation: 0,
                       toolbarHeight: 80,
@@ -1632,44 +1290,8 @@ class _UmpireHomePageState extends State<UmpireHomePage> with SingleTickerProvid
                               color: const Color(0xFF333333), // Text - Primary
                             ),
                           ),
-                          const SizedBox(height: 4),
-                          GestureDetector(
-                            onTap: _showLocationSearchDialog,
-                            child: Row(
-                              children: [
-                                const Icon(Icons.location_pin, color: Color(0xFF757575), size: 18), // Text - Secondary
-                                const SizedBox(width: 8),
-                                _isLoadingLocation && !_locationFetchCompleted
-                                    ? const SizedBox(
-                                        width: 100,
-                                        height: 20,
-                                        child: Center(
-                                          child: SizedBox(
-                                            width: 16,
-                                            height: 16,
-                                            child: CircularProgressIndicator(
-                                              strokeWidth: 2,
-                                              valueColor: AlwaysStoppedAnimation<Color>(
-                                                Color(0xFFF4A261), // Accent
-                                              ),
-                                            ),
-                                          ),
-                                        ),
-                                      )
-                                    : Flexible(
-                                        child: Text(
-                                          _location,
-                                          style: GoogleFonts.poppins(
-                                            color: const Color(0xFF757575), // Text - Secondary
-                                            fontSize: 14,
-                                          ),
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                      ),
-                                const Icon(Icons.arrow_drop_down, color: Color(0xFF757575), size: 18), // Text - Secondary
-                              ],
-                            ),
-                          ),
+                         
+                         
                         ],
                       ),
                       actions: [

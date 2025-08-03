@@ -46,8 +46,8 @@ class OrganizerHomePage extends StatefulWidget {
 
 class _OrganizerHomePageState extends State<OrganizerHomePage> with SingleTickerProviderStateMixin {
   int _selectedIndex = 0;
-  String _location = 'Hyderabad, India';
-  String _userCity = 'hyderabad';
+  String _location = '';
+  String _userCity = '';
   bool _isLoadingLocation = false;
   bool _locationFetchCompleted = false;
   bool _shouldReturnToPlayPage = false;
@@ -83,8 +83,8 @@ class _OrganizerHomePageState extends State<OrganizerHomePage> with SingleTicker
       } else {
         if (mounted) {
           setState(() {
-            _location = 'Hyderabad, India';
-            _userCity = 'hyderabad';
+            _location = '';
+            _userCity = '';
             _locationFetchCompleted = true;
             _isLoadingLocation = false;
           });
@@ -126,7 +126,6 @@ class _OrganizerHomePageState extends State<OrganizerHomePage> with SingleTicker
       'gender': 'unknown',
       'phone': '',
       'profileImage': '',
-      'city': _userCity.isNotEmpty ? _userCity : 'hyderabad',
       'updatedAt': Timestamp.now(),
     };
 
@@ -214,8 +213,8 @@ class _OrganizerHomePageState extends State<OrganizerHomePage> with SingleTicker
       if (!serviceEnabled) {
         if (mounted) {
           setState(() {
-            _location = 'Hyderabad, India';
-            _userCity = 'hyderabad';
+            _location = '';
+            _userCity = '';
             _showToast = true;
             _toastMessage = 'Location services disabled';
             _toastType = ToastificationType.warning;
@@ -230,8 +229,8 @@ class _OrganizerHomePageState extends State<OrganizerHomePage> with SingleTicker
         if (permission == LocationPermission.denied) {
           if (mounted) {
             setState(() {
-              _location = 'Hyderabad, India';
-              _userCity = 'hyderabad';
+              _location = '';
+              _userCity = '';
               _showToast = true;
               _toastMessage = 'Location permission denied';
               _toastType = ToastificationType.error;
@@ -244,8 +243,8 @@ class _OrganizerHomePageState extends State<OrganizerHomePage> with SingleTicker
       if (permission == LocationPermission.deniedForever) {
         if (mounted) {
           setState(() {
-            _location = 'Hyderabad, India';
-            _userCity = 'hyderabad';
+            _location = '';
+            _userCity = '';
             _showToast = true;
             _toastMessage = 'Location permission denied forever';
             _toastType = ToastificationType.error;
@@ -262,21 +261,34 @@ class _OrganizerHomePageState extends State<OrganizerHomePage> with SingleTicker
       final placemarks = await placemarkFromCoordinates(position.latitude, position.longitude)
           .timeout(const Duration(seconds: 5));
 
-      if (mounted) {
+      if (mounted && placemarks.isNotEmpty) {
+        final placemark = placemarks.first;
+        final city = placemark.locality ?? placemark.subAdministrativeArea ?? placemark.administrativeArea ?? '';
+        final country = placemark.country ?? '';
         setState(() {
-          _location = placemarks.isNotEmpty ? '${placemarks.first.locality ?? 'Hyderabad'}, India' : 'Hyderabad, India';
-          _userCity = placemarks.isNotEmpty ? placemarks.first.locality?.toLowerCase() ?? 'hyderabad' : 'hyderabad';
+          _location = country.isNotEmpty ? '$city, $country' : city;
+          _userCity = city.isNotEmpty ? city.toLowerCase() : '';
           _showToast = true;
-          _toastMessage = 'Location updated to $_location';
-          _toastType = ToastificationType.success;
+          _toastMessage = city.isNotEmpty ? 'Location updated to $_location' : 'Unable to determine city';
+          _toastType = city.isNotEmpty ? ToastificationType.success : ToastificationType.warning;
         });
+      } else {
+        if (mounted) {
+          setState(() {
+            _location = '';
+            _userCity = '';
+            _showToast = true;
+            _toastMessage = 'Unable to determine location';
+            _toastType = ToastificationType.error;
+          });
+        }
       }
     } catch (e) {
       debugPrint('Location error: $e');
       if (mounted) {
         setState(() {
-          _location = 'Hyderabad, India';
-          _userCity = 'hyderabad';
+          _location = '';
+          _userCity = '';
           _showToast = true;
           _toastMessage = 'Failed to fetch location';
           _toastType = ToastificationType.error;
@@ -297,7 +309,7 @@ class _OrganizerHomePageState extends State<OrganizerHomePage> with SingleTicker
       if (mounted) {
         setState(() {
           _showToast = true;
-          _toastMessage = 'Please enter a location';
+          _toastMessage = 'Please enter a city name';
           _toastType = ToastificationType.error;
         });
       }
@@ -306,32 +318,53 @@ class _OrganizerHomePageState extends State<OrganizerHomePage> with SingleTicker
 
     try {
       final locations = await locationFromAddress(query).timeout(const Duration(seconds: 5));
-      if (locations.isEmpty) {
-        throw Exception('No locations found');
-      }
-
-      final location = locations.first;
-      final placemarks = await placemarkFromCoordinates(location.latitude, location.longitude)
-          .timeout(const Duration(seconds: 3));
-
-      if (mounted) {
-        setState(() {
-          _location = placemarks.isNotEmpty ? '${placemarks.first.locality ?? 'Hyderabad'}, India' : 'Hyderabad, India';
-          _userCity = placemarks.isNotEmpty ? placemarks.first.locality?.toLowerCase() ?? 'hyderabad' : 'hyderabad';
-          _showToast = true;
-          _toastMessage = 'Location updated to $_location';
-          _toastType = ToastificationType.success;
-        });
+      if (locations.isNotEmpty) {
+        final placemarks = await placemarkFromCoordinates(locations.first.latitude, locations.first.longitude)
+            .timeout(const Duration(seconds: 3));
+        if (mounted && placemarks.isNotEmpty) {
+          final placemark = placemarks.first;
+          final city = placemark.locality ?? placemark.subAdministrativeArea ?? placemark.administrativeArea ?? query;
+          final country = placemark.country ?? '';
+          setState(() {
+            _location = country.isNotEmpty ? '$city, $country' : city;
+            _userCity = city.toLowerCase();
+            _showToast = true;
+            _toastMessage = 'Location set to $_location';
+            _toastType = ToastificationType.success;
+          });
+        } else {
+          // Fallback to using the query as the city if placemarks are empty
+          if (mounted) {
+            setState(() {
+              _location = query;
+              _userCity = query.toLowerCase();
+              _showToast = true;
+              _toastMessage = 'Location set to $_location';
+              _toastType = ToastificationType.success;
+            });
+          }
+        }
+      } else {
+        // Accept the query as the city if geocoding fails
+        if (mounted) {
+          setState(() {
+            _location = query;
+            _userCity = query.toLowerCase();
+            _showToast = true;
+            _toastMessage = 'Location set to $_location';
+            _toastType = ToastificationType.success;
+          });
+        }
       }
     } catch (e) {
       debugPrint('Search location error: $e');
       if (mounted) {
         setState(() {
-          _location = 'Hyderabad, India';
-          _userCity = 'hyderabad';
+          _location = query;
+          _userCity = query.toLowerCase();
           _showToast = true;
-          _toastMessage = 'Failed to find location';
-          _toastType = ToastificationType.error;
+          _toastMessage = 'Location set to $_location';
+          _toastType = ToastificationType.success;
         });
       }
     }
@@ -1033,7 +1066,7 @@ class _OrganizerHomePageState extends State<OrganizerHomePage> with SingleTicker
               Divider(color: const Color(0xFFA8DADC).withOpacity(0.2), height: 1), // Cool Blue Highlights
               const SizedBox(height: 16),
               Text(
-                'Or search for a location',
+                'Or search for a city',
                 style: GoogleFonts.poppins(color: const Color(0xFFA8DADC), fontSize: 14), // Cool Blue Highlights
               ),
               const SizedBox(height: 12),
@@ -1120,7 +1153,7 @@ class _OrganizerHomePageState extends State<OrganizerHomePage> with SingleTicker
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(context) {
     if (_showToast && _toastMessage != null && _toastType != null && mounted) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         toastification.show(
@@ -1232,7 +1265,7 @@ class _OrganizerHomePageState extends State<OrganizerHomePage> with SingleTicker
                       toolbarHeight: 80,
                       flexibleSpace: Container(
                         decoration: const BoxDecoration(
-                         color: Color(0xFF6C9A8B)
+                          color: Color(0xFF6C9A8B),
                         ),
                       ),
                       title: Column(
@@ -1264,7 +1297,7 @@ class _OrganizerHomePageState extends State<OrganizerHomePage> with SingleTicker
                                       )
                                     : Expanded(
                                         child: Text(
-                                          _location,
+                                          _location.isNotEmpty ? _location : 'Select a location',
                                           style: GoogleFonts.poppins(
                                             color: const Color(0xFF757575), // Text Secondary
                                             fontSize: 14,
@@ -1323,7 +1356,7 @@ class _OrganizerHomePageState extends State<OrganizerHomePage> with SingleTicker
                   BottomNavigationBarItem(
                     icon: Icon(Icons.sports_tennis_outlined),
                     activeIcon: Icon(Icons.sports_tennis),
-                    label: 'Matches',
+                    label: 'Tournaments',
                   ),
                   BottomNavigationBarItem(
                     icon: Icon(Icons.person_outline),

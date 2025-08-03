@@ -14,6 +14,8 @@ import 'package:game_app/tournaments/match_details_page.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
+import 'package:timezone/timezone.dart' as tz;
+import 'package:timezone/timezone.dart';
 import 'dart:io';
 import 'package:toastification/toastification.dart';
 
@@ -41,6 +43,8 @@ class TournamentDetailsPage extends StatefulWidget {
 
 class _TournamentDetailsPageState extends State<TournamentDetailsPage>
     with SingleTickerProviderStateMixin {
+        String? _tournamentProfileImage;
+        
   bool _isLoading = false;
   bool _hasJoined = false;
   bool _showMatchGenerationOptions = false;
@@ -50,7 +54,6 @@ class _TournamentDetailsPageState extends State<TournamentDetailsPage>
   late List<Map<String, dynamic>> _teams;
   late List<Map<String, dynamic>> _matches;
   final Map<String, Map<String, dynamic>> _leaderboardData = {};
-  final GlobalKey _matchesListKey = GlobalKey();
 
   final Color _primaryColor = const Color(0xFF6C9A8B);
   final Color _secondaryColor = const Color(0xFFC1DADB);
@@ -79,68 +82,69 @@ class _TournamentDetailsPageState extends State<TournamentDetailsPage>
   }
 
  void _listenToTournamentUpdates() {
-    FirebaseFirestore.instance
-        .collection('tournaments')
-        .doc(widget.tournament.id)
-        .snapshots()
-        .listen((snapshot) async {
-          if (!mounted) return;
-          if (!snapshot.exists || snapshot.data() == null) {
-            debugPrint('Tournament document does not exist or is empty');
-            return;
-          }
-          final data = snapshot.data()!;
-          try {
-            // Load participants with names
-            final participants = List<Map<String, dynamic>>.from(data['participants'] ?? []);
-            final updatedParticipants = await _loadParticipantNames(participants);
+  FirebaseFirestore.instance
+      .collection('tournaments')
+      .doc(widget.tournament.id)
+      .snapshots()
+      .listen((snapshot) async {
+    if (!mounted) return;
+    if (!snapshot.exists || snapshot.data() == null) {
+      debugPrint('Tournament document does not exist or is empty');
+      return;
+    }
+    final data = snapshot.data()!;
+    try {
+      // Load participants with names
+      final participants = List<Map<String, dynamic>>.from(data['participants'] ?? []);
+      final updatedParticipants = await _loadParticipantNames(participants);
 
-            // Load teams with player names if doubles tournament
-            List<Map<String, dynamic>> updatedTeams = [];
-            if (_isDoublesTournament()) {
-              updatedTeams = await _loadTeamPlayerNames(List<Map<String, dynamic>>.from(data['teams'] ?? []));
-            } else {
-              updatedTeams = List<Map<String, dynamic>>.from(data['teams'] ?? []);
-            }
+      // Load teams with player names if doubles tournament
+      List<Map<String, dynamic>> updatedTeams = [];
+      if (_isDoublesTournament()) {
+        updatedTeams = await _loadTeamPlayerNames(List<Map<String, dynamic>>.from(data['teams'] ?? []));
+      } else {
+        updatedTeams = List<Map<String, dynamic>>.from(data['teams'] ?? []);
+      }
 
-            // Validate matches
-            final matches = List<Map<String, dynamic>>.from(data['matches'] ?? []);
-            for (var match in matches) {
-              if (!match.containsKey('matchId') || !match.containsKey('liveScores')) {
-                debugPrint('Invalid match data: $match');
-                continue;
-              }
-            }
+      // Validate matches
+      final matches = List<Map<String, dynamic>>.from(data['matches'] ?? []);
+      for (var match in matches) {
+        if (!match.containsKey('matchId') || !match.containsKey('liveScores')) {
+          debugPrint('Invalid match data: $match');
+          continue;
+        }
+      }
 
-            setState(() {
-              _participants = updatedParticipants;
-              _teams = updatedTeams;
-              _matches = matches;
-              widget.tournament.profileImage = data['profileImage']?.toString();
-            });
-            await _generateLeaderboardData();
-            await _updateNextRoundMatches(); // Update next-round matches
-          } catch (e) {
-            debugPrint('Error processing tournament updates: $e');
-            toastification.show(
-              context: context,
-              type: ToastificationType.error,
-              title: const Text('Update Error'),
-              description: Text('Failed to process tournament data: $e'),
-              autoCloseDuration: const Duration(seconds: 2),
-            );
-          }
-        }, onError: (e) {
-          debugPrint('Error in tournament updates: $e');
-          toastification.show(
-            context: context,
-            type: ToastificationType.error,
-            title: const Text('Update Error'),
-            description: Text('Failed to update tournament data: $e'),
-            autoCloseDuration: const Duration(seconds: 2),
-          );
-        });
-  }
+      setState(() {
+        _participants = updatedParticipants;
+        _teams = updatedTeams;
+        _matches = matches;
+       
+        _tournamentProfileImage = data['profileImage']?.toString();
+      });
+      await _generateLeaderboardData();
+      await _updateNextRoundMatches();
+    } catch (e) {
+      debugPrint('Error processing tournament updates: $e');
+      toastification.show(
+        context: context,
+        type: ToastificationType.error,
+        title: const Text('Update Error'),
+        description: Text('Failed to process tournament data: $e'),
+        autoCloseDuration: const Duration(seconds: 2),
+      );
+    }
+  }, onError: (e) {
+    debugPrint('Error in tournament updates: $e');
+    toastification.show(
+      context: context,
+      type: ToastificationType.error,
+      title: const Text('Update Error'),
+      description: Text('Failed to update tournament data: $e'),
+      autoCloseDuration: const Duration(seconds: 2),
+    );
+  });
+}
 
 
 Future<List<Map<String, dynamic>>> _loadParticipantNames(List<Map<String, dynamic>> participants) async {
@@ -260,123 +264,165 @@ Future<List<Map<String, dynamic>>> _loadTeamPlayerNames(List<Map<String, dynamic
   }
 
   Future<void> _resetMatches() async {
-    if (_isLoading) return;
-    setState(() {
-      _isLoading = true;
-    });
+  if (_isLoading || !_canCreateMatches) return;
 
-    try {
-      await FirebaseFirestore.instance
-          .collection('tournaments')
-          .doc(widget.tournament.id)
-          .update({'matches': []});
+  // Show confirmation dialog
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: Text(
+        'Reset All Matches?',
+        style: GoogleFonts.poppins(
+          color: _textColor,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+      content: Text(
+        'This will delete all current matches and allow you to generate new ones. This action cannot be undone.',
+        style: GoogleFonts.poppins(
+          color: _secondaryText,
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: Text(
+            'Cancel',
+            style: GoogleFonts.poppins(
+              color: _secondaryText,
+            ),
+          ),
+        ),
+        TextButton(
+          onPressed: () => Navigator.pop(context, true),
+          child: Text(
+            'Reset',
+            style: GoogleFonts.poppins(
+              color: _errorColor,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
 
-      if (mounted) {
-        setState(() {
-          _matches = [];
-          _showMatchGenerationOptions = true;
-        });
-        toastification.show(
-          context: context,
-          type: ToastificationType.success,
-          title: const Text('Matches Reset'),
-          description: const Text('Choose how to generate new matches.'),
-          autoCloseDuration: const Duration(seconds: 2),
-          backgroundColor: _successColor,
-          foregroundColor: _textColor,
-          alignment: Alignment.bottomCenter,
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        toastification.show(
-          context: context,
-          type: ToastificationType.error,
-          title: const Text('Reset Failed'),
-          description: Text('Failed to reset matches: $e'),
-          autoCloseDuration: const Duration(seconds: 2),
-          backgroundColor: _errorColor,
-          foregroundColor: _textColor,
-          alignment: Alignment.bottomCenter,
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isLoading = false;
-        });
-      }
+  if (confirmed != true) return;
+
+  setState(() {
+    _isLoading = true;
+  });
+
+  try {
+    await FirebaseFirestore.instance
+        .collection('tournaments')
+        .doc(widget.tournament.id)
+        .update({'matches': []});
+
+    if (mounted) {
+      setState(() {
+        _matches = [];
+        _showMatchGenerationOptions = true;
+      });
+      toastification.show(
+        context: context,
+        type: ToastificationType.success,
+        title: const Text('Matches Reset'),
+        description: const Text('All matches have been successfully reset.'),
+        autoCloseDuration: const Duration(seconds: 2),
+        backgroundColor: _successColor,
+        foregroundColor: _textColor,
+        alignment: Alignment.bottomCenter,
+      );
+    }
+  } catch (e) {
+    if (mounted) {
+      toastification.show(
+        context: context,
+        type: ToastificationType.error,
+        title: const Text('Reset Failed'),
+        description: Text('Failed to reset matches: $e'),
+        autoCloseDuration: const Duration(seconds: 2),
+        backgroundColor: _errorColor,
+        foregroundColor: _textColor,
+        alignment: Alignment.bottomCenter,
+      );
+    }
+  } finally {
+    if (mounted) {
+      setState(() {
+        _isLoading = false;
+      });
     }
   }
-
-// Remove this method entirely, as _creatorName is not defined and widget.creatorName is already provided.
+}
 
   Future<void> _uploadTournamentImage() async {
-    if (_isLoading) return;
-    setState(() {
-      _isLoading = true;
-    });
+  if (_isLoading) return;
+  setState(() {
+    _isLoading = true;
+  });
 
-    try {
-      final picker = ImagePicker();
-      final pickedFile = await picker.pickImage(source: ImageSource.gallery);
-      if (pickedFile == null) {
-        if (mounted) {
-          setState(() {
-            _isLoading = false;
-          });
-        }
-        return;
-      }
-
-      final file = File(pickedFile.path);
-      final storageRef = FirebaseStorage.instance
-          .ref()
-          .child('tournament_images/${widget.tournament.id}.jpg');
-      await storageRef.putFile(file);
-      final downloadUrl = await storageRef.getDownloadURL();
-
-      await FirebaseFirestore.instance
-          .collection('tournaments')
-          .doc(widget.tournament.id)
-          .update({'profileImage': downloadUrl});
-
-      if (mounted) {
-        setState(() {
-          widget.tournament.profileImage = downloadUrl;
-        });
-        toastification.show(
-          context: context,
-          type: ToastificationType.success,
-          title: const Text('Image Uploaded'),
-          description: const Text('Tournament image updated successfully!'),
-          autoCloseDuration: const Duration(seconds: 2),
-          backgroundColor: _successColor,
-          foregroundColor: _textColor,
-          alignment: Alignment.bottomCenter,
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        toastification.show(
-          context: context,
-          type: ToastificationType.error,
-          title: const Text('Upload Failed'),
-          description: Text('Failed to upload image: $e'),
-          autoCloseDuration: const Duration(seconds: 2),
-          backgroundColor: _errorColor,
-          foregroundColor: _textColor,
-          alignment: Alignment.bottomCenter,
-        );
-      }
-    } finally {
+  try {
+    final picker = ImagePicker();
+    final pickedFile = await picker.pickImage(source: ImageSource.gallery);
+    if (pickedFile == null) {
       if (mounted) {
         setState(() {
           _isLoading = false;
         });
       }
+      return;
+    }
+
+    final file = File(pickedFile.path);
+    final storageRef = FirebaseStorage.instance
+        .ref()
+        .child('tournament_images/${widget.tournament.id}.jpg');
+    await storageRef.putFile(file);
+    final downloadUrl = await storageRef.getDownloadURL();
+
+    await FirebaseFirestore.instance
+        .collection('tournaments')
+        .doc(widget.tournament.id)
+        .update({'profileImage': downloadUrl});
+
+    if (mounted) {
+      setState(() {
+        _tournamentProfileImage = downloadUrl;
+      });
+      toastification.show(
+        context: context,
+        type: ToastificationType.success,
+        title: const Text('Image Uploaded'),
+        description: const Text('Tournament image updated successfully!'),
+        autoCloseDuration: const Duration(seconds: 2),
+        backgroundColor: _successColor,
+        foregroundColor: _textColor,
+        alignment: Alignment.bottomCenter,
+      );
+    }
+  } catch (e) {
+    if (mounted) {
+      toastification.show(
+        context: context,
+        type: ToastificationType.error,
+        title: const Text('Upload Failed'),
+        description: Text('Failed to upload image: $e'),
+        autoCloseDuration: const Duration(seconds: 2),
+        backgroundColor: _errorColor,
+        foregroundColor: _textColor,
+        alignment: Alignment.bottomCenter,
+      );
+    }
+  } finally {
+    if (mounted) {
+      setState(() {
+        _isLoading = false;
+      });
     }
   }
+}
 
   void _showImageOptionsDialog(bool isCreator) {
     showDialog(
@@ -661,7 +707,7 @@ Future<String> _getDisplayName(String userId) async {
   
 
   Future<void> _generateMatches() async {
-    if (_isLoading) return;
+    if (_isLoading || !_canCreateMatches) return;
     setState(() {
       _isLoading = true;
     });
@@ -675,9 +721,8 @@ Future<String> _getDisplayName(String userId) async {
       final updatedParticipants = _participants.map((p) => {...p, 'score': 0}).toList();
 
       DateTime matchStartDate = widget.tournament.startDate;
-      final startHour = widget.tournament.startTime.hour;
-      final startMinute = widget.tournament.startTime.minute;
-
+      final startHour = widget.tournament.startDate.hour;
+final startMinute = widget.tournament.startDate.minute;
       if (_isDoublesTournament()) {
         if (_teams.length < 2) {
           throw 'Need at least 2 teams to schedule matches.';
@@ -1252,112 +1297,205 @@ Future<String> _getDisplayName(String userId) async {
       }
     }
 }
+
   Future<void> _updateNextRoundMatches() async {
   final matches = List<Map<String, dynamic>>.from(_matches);
   bool updated = false;
   final isDoubles = _isDoublesTournament();
+  final isGroupKnockout = widget.tournament.gameType.toLowerCase() == 'group + knockout';
 
-  print('DEBUG: Starting _updateNextRoundMatches. isDoubles: $isDoubles, Total matches: ${matches.length}');
+  print('DEBUG: Starting _updateNextRoundMatches. isDoubles: $isDoubles, isGroupKnockout: $isGroupKnockout, Total matches: ${matches.length}');
 
-  // Collect first-round match IDs
-  final firstRoundMatchIds = matches
-      .where((m) => m['round'] == 1)
-      .map((m) => m['matchId'] as String)
-      .toList();
-  print('DEBUG: First-round match IDs: $firstRoundMatchIds');
+  if (isGroupKnockout) {
+    // Check if all group stage matches are completed
+    final groupMatches = matches.where((m) => m['phase'] == 'group').toList();
+    final allGroupMatchesCompleted = groupMatches.every((m) => m['completed'] == true && m['winner'] != null);
+    print('DEBUG: Group stage matches: ${groupMatches.length}, all completed: $allGroupMatchesCompleted');
 
-  // Process all completed matches to update next round matches
-  for (var match in matches) {
-    if (match['completed'] != true || match['winner'] == null) {
-      print('DEBUG: Skipping match ${match['matchId']}: completed=${match['completed']}, winner=${match['winner']}');
-      continue;
+    if (!allGroupMatchesCompleted) {
+      print('DEBUG: Group stage incomplete, skipping knockout match updates');
+      return;
     }
 
-    print('DEBUG: Processing completed match ${match['matchId']} in round ${match['round']}, winner: ${match['winner']}');
+    // Calculate group stage rankings
+    final groupRankings = <String, List<Map<String, dynamic>>>{};
+    final groups = _participants.fold<Map<String, List<Map<String, dynamic>>>>(
+      {},
+      (acc, p) {
+        final group = p['group'] ?? 'A'; // Default to group A for single-group tournaments
+        acc[group] = acc[group] ?? [];
+        acc[group]!.add({...p, 'score': p['score'] ?? 0});
+        return acc;
+      },
+    );
 
-    final winnerId = match['winner'] == (isDoubles ? 'team1' : 'player1') 
-        ? (isDoubles ? match['team1Ids'] : match['player1Id'])
-        : (isDoubles ? match['team2Ids'] : match['player2Id']);
-    
-    final winnerName = match['winner'] == (isDoubles ? 'team1' : 'player1')
-        ? (isDoubles ? match['team1'] : match['player1'])
-        : (isDoubles ? match['team2'] : match['player2']);
+    for (var group in groups.keys) {
+      final groupParticipants = groups[group]!;
+      final groupMatches = matches.where((m) => m['group'] == group && m['phase'] == 'group' && m['completed'] == true).toList();
 
-    print('DEBUG: Winner ID: $winnerId, Winner Name: $winnerName');
-
-    // Find the second-round match (final) for a 4-player tournament
-    bool winnerAssigned = false;
-    for (var nextMatch in matches) {
-      if (nextMatch['round'] == match['round'] + 1 && firstRoundMatchIds.contains(match['matchId'])) {
-        print('DEBUG: Checking next match ${nextMatch['matchId']} in round ${nextMatch['round']} for first-round match ${match['matchId']}');
-
-        // Prevent assigning the same player to both slots
-        if ((nextMatch[isDoubles ? 'team1Ids' : 'player1Id'] == null || 
-             nextMatch[isDoubles ? 'team1Ids' : 'player1Id'] == 'TBD') &&
-            nextMatch[isDoubles ? 'team2Ids' : 'player2Id'] != winnerId) {
-          print('DEBUG: Updating slot 1 for match ${nextMatch['matchId']} with winner $winnerName');
-          if (isDoubles) {
-            nextMatch['team1Ids'] = List.from(winnerId);
-            nextMatch['team1'] = List.from(winnerName);
-          } else {
-            nextMatch['player1Id'] = winnerId;
-            nextMatch['player1'] = winnerName;
+      // Update scores based on match results
+      for (var participant in groupParticipants) {
+        int score = 0;
+        for (var match in groupMatches) {
+          if (match['winner'] == 'player1' && match['player1Id'] == participant['id']) {
+            score += 2;
+          } else if (match['winner'] == 'player2' && match['player2Id'] == participant['id']) {
+            score += 2;
           }
-          updated = true;
-          winnerAssigned = true;
-        } else if ((nextMatch[isDoubles ? 'team2Ids' : 'player2Id'] == null || 
-                    nextMatch[isDoubles ? 'team2Ids' : 'player2Id'] == 'TBD') &&
-                   nextMatch[isDoubles ? 'team1Ids' : 'player1Id'] != winnerId) {
-          print('DEBUG: Updating slot 2 for match ${nextMatch['matchId']} with winner $winnerName');
-          if (isDoubles) {
-            nextMatch['team2Ids'] = List.from(winnerId);
-            nextMatch['team2'] = List.from(winnerName);
-          } else {
-            nextMatch['player2Id'] = winnerId;
-            nextMatch['player2'] = winnerName;
-          }
-          updated = true;
-          winnerAssigned = true;
-        } else {
-          print('DEBUG: WARNING - Cannot assign winner to match ${nextMatch['matchId']}: '
-                'player1/team1=${nextMatch[isDoubles ? 'team1Ids' : 'player1Id']}, '
-                'player2/team2=${nextMatch[isDoubles ? 'team2Ids' : 'player2Id']}');
         }
+        participant['score'] = score;
+      }
 
-        // Set a default start time if not set
-        if (nextMatch['startTime'] == null) {
-          final prevMatchTime = match['startTime'] as Timestamp?;
-          if (prevMatchTime != null) {
-            nextMatch['startTime'] = Timestamp.fromDate(
-              prevMatchTime.toDate().add(const Duration(days: 1)),
-            );
-            print('DEBUG: Set startTime for match ${nextMatch['matchId']} to ${nextMatch['startTime'].toDate()}');
-            updated = true;
-          } else {
-            print('DEBUG: WARNING - Previous match ${match['matchId']} has no startTime');
-          }
+      // Sort by score (descending)
+      groupParticipants.sort((a, b) => b['score'].compareTo(a['score']));
+      groupRankings[group] = groupParticipants.take(2).toList(); // Top 2 per group
+    }
+
+    // Update knockout matches with qualifiers
+    final qualifiers = groupRankings.values.expand((list) => list).toList();
+    qualifiers.shuffle(); // Random seeding
+    print('DEBUG: Qualifiers for knockout: ${qualifiers.map((q) => q['id']).toList()}');
+
+    for (var match in matches) {
+     if (match['phase'] == 'knockout' && match['round'] == groupMatches.map((m) => m['round'] as int).reduce((a, b) => a > b ? a : b) + 1){
+        print('DEBUG: Processing knockout match ${match['matchId']} in round ${match['round']}');
+        if (qualifiers.isEmpty) {
+          print('DEBUG: WARNING - No qualifiers available for match ${match['matchId']}');
+          continue;
+        }
+        final player1 = qualifiers.removeAt(0);
+        final player2 = qualifiers.isNotEmpty ? qualifiers.removeAt(0) : null;
+
+        if (player2 == null) {
+          // Bye match
+          print('DEBUG: Updating match ${match['matchId']} with player1: ${player1['name']}, player2: Bye');
+          match['player1'] = await _getDisplayName(player1['id']);
+          match['player1Id'] = player1['id'];
+          match['player2'] = 'Bye';
+          match['player2Id'] = 'bye';
+          match['completed'] = true;
+          match['winner'] = 'player1';
+          match['qualifierInfo'] = {
+            'player1': 'Group ${groupRankings.keys.firstWhere((k) => groupRankings[k]!.contains(player1))} #${groupRankings.values.firstWhere((v) => v.contains(player1)).indexOf(player1) + 1}',
+            'player2': 'Bye',
+          };
+          updated = true;
+        } else {
+          print('DEBUG: Updating match ${match['matchId']} with player1: ${player1['name']}, player2: ${player2['name']}');
+          match['player1'] = await _getDisplayName(player1['id']);
+          match['player1Id'] = player1['id'];
+          match['player2'] = await _getDisplayName(player2['id']);
+          match['player2Id'] = player2['id'];
+          match['qualifierInfo'] = {
+            'player1': 'Group ${groupRankings.keys.firstWhere((k) => groupRankings[k]!.contains(player1))} #${groupRankings.values.firstWhere((v) => v.contains(player1)).indexOf(player1) + 1}',
+            'player2': 'Group ${groupRankings.keys.firstWhere((k) => groupRankings[k]!.contains(player2))} #${groupRankings.values.firstWhere((v) => v.contains(player2)).indexOf(player2) + 1}',
+          };
+          updated = true;
+        }
+        if (match['startTime'] == null) {
+          match['startTime'] = Timestamp.fromDate(DateTime(
+            widget.tournament.startDate.year,
+            widget.tournament.startDate.month,
+           widget.tournament.startDate.day + (match['round'] as num).toInt() - 1,
+          widget.tournament.startDate.hour,
+widget.tournament.startDate.minute,
+          ));
+          print('DEBUG: Set startTime for match ${match['matchId']} to ${match['startTime'].toDate()}');
         }
       }
     }
+  } else {
+    // Existing logic for knockout tournaments
+    final firstRoundMatchIds = matches
+        .where((m) => m['round'] == 1)
+        .map((m) => m['matchId'] as String)
+        .toList();
+    print('DEBUG: First-round match IDs: $firstRoundMatchIds');
 
-    if (!winnerAssigned) {
-      print('DEBUG: WARNING - No next match found for winner of ${match['matchId']}');
+    for (var match in matches) {
+      if (match['completed'] != true || match['winner'] == null) {
+        print('DEBUG: Skipping match ${match['matchId']}: completed=${match['completed']}, winner=${match['winner']}');
+        continue;
+      }
+
+      print('DEBUG: Processing completed match ${match['matchId']} in round ${match['round']}, winner: ${match['winner']}');
+
+      final winnerId = match['winner'] == (isDoubles ? 'team1' : 'player1')
+          ? (isDoubles ? match['team1Ids'] : match['player1Id'])
+          : (isDoubles ? match['team2Ids'] : match['player2Id']);
+      final winnerName = match['winner'] == (isDoubles ? 'team1' : 'player1')
+          ? (isDoubles ? match['team1'] : match['player1'])
+          : (isDoubles ? match['team2'] : match['player2']);
+
+      bool winnerAssigned = false;
+      for (var nextMatch in matches) {
+        if (nextMatch['round'] == match['round'] + 1 && firstRoundMatchIds.contains(match['matchId'])) {
+          print('DEBUG: Checking next match ${nextMatch['matchId']} in round ${nextMatch['round']} for first-round match ${match['matchId']}');
+
+          if ((nextMatch[isDoubles ? 'team1Ids' : 'player1Id'] == null ||
+                  nextMatch[isDoubles ? 'team1Ids' : 'player1Id'] == 'TBD') &&
+              nextMatch[isDoubles ? 'team2Ids' : 'player2Id'] != winnerId) {
+            print('DEBUG: Updating slot 1 for match ${nextMatch['matchId']} with winner $winnerName');
+            if (isDoubles) {
+              nextMatch['team1Ids'] = List.from(winnerId);
+              nextMatch['team1'] = List.from(winnerName);
+            } else {
+              nextMatch['player1Id'] = winnerId;
+              nextMatch['player1'] = winnerName;
+            }
+            updated = true;
+            winnerAssigned = true;
+          } else if ((nextMatch[isDoubles ? 'team2Ids' : 'player2Id'] == null ||
+                      nextMatch[isDoubles ? 'team2Ids' : 'player2Id'] == 'TBD') &&
+                     nextMatch[isDoubles ? 'team1Ids' : 'player1Id'] != winnerId) {
+            print('DEBUG: Updating slot 2 for match ${nextMatch['matchId']} with winner $winnerName');
+            if (isDoubles) {
+              nextMatch['team2Ids'] = List.from(winnerId);
+              nextMatch['team2'] = List.from(winnerName);
+            } else {
+              nextMatch['player2Id'] = winnerId;
+              nextMatch['player2'] = winnerName;
+            }
+            updated = true;
+            winnerAssigned = true;
+          } else {
+            print('DEBUG: WARNING - Cannot assign winner to match ${nextMatch['matchId']}: '
+                  'player1/team1=${nextMatch[isDoubles ? 'team1Ids' : 'player1Id']}, '
+                  'player2/team2=${nextMatch[isDoubles ? 'team2Ids' : 'player2Id']}');
+          }
+
+          if (nextMatch['startTime'] == null) {
+            final prevMatchTime = match['startTime'] as Timestamp?;
+            if (prevMatchTime != null) {
+              nextMatch['startTime'] = Timestamp.fromDate(
+                prevMatchTime.toDate().add(const Duration(days: 1)),
+              );
+              print('DEBUG: Set startTime for match ${nextMatch['matchId']} to ${nextMatch['startTime'].toDate()}');
+              updated = true;
+            } else {
+              print('DEBUG: WARNING - Previous match ${match['matchId']} has no startTime');
+            }
+          }
+        }
+      }
+
+      if (!winnerAssigned) {
+        print('DEBUG: WARNING - No next match found for winner of ${match['matchId']}');
+      }
     }
   }
 
-  // Debug pass to check for remaining TBD slots in knockout matches
+  // Debug pass for remaining TBD slots
   print('DEBUG: Checking for remaining TBD slots in knockout matches');
   for (var match in matches) {
-    if (match['bracket'] != null && match['bracket'] != 'winners') continue; // Skip non-winners bracket for knockout
-    if ((match[isDoubles ? 'team1Ids' : 'player1Id'] == 'TBD' || 
-         match[isDoubles ? 'team1Ids' : 'player1Id'] == null ||
-         match[isDoubles ? 'team2Ids' : 'player2Id'] == 'TBD' || 
-         match[isDoubles ? 'team2Ids' : 'player2Id'] == null) && 
-        match['round'] != 1) {
+    if (match['phase'] == 'knockout' &&
+        ((match[isDoubles ? 'team1Ids' : 'player1Id'] == 'TBD' ||
+          match[isDoubles ? 'team1Ids' : 'player1Id'] == null ||
+          match[isDoubles ? 'team2Ids' : 'player2Id'] == 'TBD' ||
+          match[isDoubles ? 'team2Ids' : 'player2Id'] == null))) {
       print('DEBUG: WARNING - Match ${match['matchId']} in round ${match['round']} has TBD slots: '
             'player1/team1=${match[isDoubles ? 'team1Ids' : 'player1Id']}, '
-            'player2/team2=${match[isDoubles ? 'team2Ids' : 'player2Id']}, '
-            'winnerMatchId=${match['winnerMatchId']}');
+            'player2/team2=${match[isDoubles ? 'team2Ids' : 'player2Id']}');
     }
   }
 
@@ -1380,7 +1518,6 @@ Future<String> _getDisplayName(String userId) async {
     print('DEBUG: No updates made to matches');
   }
 }
-
 
 
 Future<List<Map<String, dynamic>>> _generateDoubleEliminationMatches({
@@ -1788,7 +1925,6 @@ List<List<Map<String, dynamic>>> _computeGroups({
   return groups;
 }
 
-
 Future<List<Map<String, dynamic>>> _generateGroupKnockoutMatches({
   required List<Map<String, dynamic>> competitors,
   required Map<String, Map<String, dynamic>> existingMatches,
@@ -1801,25 +1937,21 @@ Future<List<Map<String, dynamic>>> _generateGroupKnockoutMatches({
   final shuffledCompetitors = List<Map<String, dynamic>>.from(competitors)..shuffle();
   final numCompetitors = shuffledCompetitors.length;
 
-  // Determine number of groups
+  // Determine number of groups based on participants
+  final groupCount = (numCompetitors <= 4) ? 1 : (numCompetitors / 4).ceil();
   final groups = <List<Map<String, dynamic>>>[];
-  if (numCompetitors <= 4) {
-    groups.add(shuffledCompetitors); // Single group for small tournaments
-  } else {
-    final groupCount = (numCompetitors / 4).ceil(); // Aim for ~4 per group
-    int participantsPerGroup = (numCompetitors / groupCount).floor();
-    int extraParticipants = numCompetitors % groupCount;
+  int participantsPerGroup = (numCompetitors / groupCount).floor();
+  int extraParticipants = numCompetitors % groupCount;
+  int startIndex = 0;
 
-    int startIndex = 0;
-    for (int i = 0; i < groupCount; i++) {
-      int currentGroupSize = participantsPerGroup + (extraParticipants > 0 ? 1 : 0);
-      if (startIndex + currentGroupSize > numCompetitors) {
-        currentGroupSize = numCompetitors - startIndex;
-      }
-      groups.add(shuffledCompetitors.sublist(startIndex, startIndex + currentGroupSize));
-      startIndex += currentGroupSize;
-      if (extraParticipants > 0) extraParticipants--;
+  for (int i = 0; i < groupCount; i++) {
+    int currentGroupSize = participantsPerGroup + (extraParticipants > 0 ? 1 : 0);
+    if (startIndex + currentGroupSize > numCompetitors) {
+      currentGroupSize = numCompetitors - startIndex;
     }
+    groups.add(shuffledCompetitors.sublist(startIndex, startIndex + currentGroupSize));
+    startIndex += currentGroupSize;
+    if (extraParticipants > 0) extraParticipants--;
   }
 
   DateTime currentDate = startDate;
@@ -1843,7 +1975,6 @@ Future<List<Map<String, dynamic>>> _generateGroupKnockoutMatches({
     final matchesPerRound = competitorsWithBye.length ~/ 2;
     final rounds = List.generate(totalRounds, (_) => <Map<String, dynamic>>[]);
 
-    // Generate matches for each round
     for (var r = 0; r < totalRounds; r++) {
       for (var i = 0; i < matchesPerRound; i++) {
         final competitor1 = competitorsWithBye[i];
@@ -1912,13 +2043,11 @@ Future<List<Map<String, dynamic>>> _generateGroupKnockoutMatches({
           }
         }
       }
-      // Rotate competitors for the next round
       final temp = competitorsWithBye.sublist(1);
       competitorsWithBye.setRange(1, competitorsWithBye.length, [...temp.sublist(1), temp[0]]);
       round++;
     }
 
-    // Schedule group stage matches
     for (var r in rounds) {
       for (var match in r) {
         final competitor1Ids = isDoubles ? List<String>.from(match['team1Ids']) : [match['player1Id']];
@@ -1953,44 +2082,137 @@ Future<List<Map<String, dynamic>>> _generateGroupKnockoutMatches({
     }
   }
 
-  // Generate knockout phase matches with TBD competitors
-  final numGroups = groups.length;
-  final numQualifiers = numGroups >= 1 ? 2 : 0; // Always take top 2 from single group
-  if (numQualifiers < 2) {
-    print('DEBUG: Not enough qualifiers ($numQualifiers) for knockout phase');
+  // Check if all group stage matches are completed
+  final groupMatches = existingMatches.values.where((m) => m['phase'] == 'group').toList();
+  final allGroupMatchesCompleted = groupMatches.isNotEmpty &&
+      groupMatches.every((m) => m['completed'] == true && m['winner'] != null);
+  print('DEBUG: Group stage matches: ${groupMatches.length}, all completed: $allGroupMatchesCompleted');
+
+  // Generate knockout matches
+  int currentRoundMatches = (numCompetitors <= 4) ? 1 : (groupCount * 2 / 2).floor();
+  int knockoutRound = 1;
+  int matchCounter = 1;
+  int totalRound = round;
+
+  // Always generate knockout match with TBD if group stage is incomplete
+  for (int i = 0; i < currentRoundMatches; i++) {
+    final matchId = 'knockout_match_${matchCounter}_r$knockoutRound';
+    if (!existingMatches.containsKey(matchId)) {
+      final match = {
+        'matchId': matchId,
+        'round': totalRound,
+        'phase': 'knockout',
+        'player1': 'TBD',
+        'player2': 'TBD',
+        'player1Id': null,
+        'player2Id': null,
+        'completed': false,
+        'winner': null,
+        'umpire': {'name': '', 'email': '', 'phone': ''},
+        'liveScores': {
+          'player1': [0, 0, 0],
+          'player2': [0, 0, 0],
+          'currentGame': 1,
+          'isLive': false,
+          'currentServer': 'player1',
+        },
+        'startTime': Timestamp.fromDate(DateTime(
+          currentDate.year,
+          currentDate.month,
+          currentDate.day,
+          startHour,
+          startMinute,
+        )),
+        'qualifierInfo': {
+          'player1': 'Group A #1',
+          'player2': 'Group A #2',
+        },
+      };
+      newMatches.add(match);
+      matchCounter++;
+      currentDate = currentDate.add(const Duration(days: 1));
+    }
+    totalRound++;
+  }
+
+  if (!allGroupMatchesCompleted) {
+    print('DEBUG: Group stage incomplete, generated knockout matches with TBD');
     return newMatches;
   }
 
-  // Calculate number of knockout rounds needed
-  final totalKnockoutMatches = numQualifiers ~/ 2;
-  int currentRoundMatches = totalKnockoutMatches;
-  int knockoutRound = 1;
-  int matchCounter = 1;
+  // Calculate group stage rankings
+  final groupRankings = <String, List<Map<String, dynamic>>>{};
+  for (var group in groups) {
+    final groupIndex = groups.indexOf(group) + 1;
+    final groupName = String.fromCharCode(64 + groupIndex);
+    final groupParticipants = group.map((p) => {...p, 'score': 0}).toList();
 
-  // Generate initial knockout round matches
+    // Fetch completed group stage matches
+    final groupMatches = existingMatches.values
+        .where((m) => m['group'] == groupName && m['phase'] == 'group' && m['completed'] == true)
+        .toList();
+
+    // Update scores based on match results
+    for (var participant in groupParticipants) {
+      int score = 0;
+      for (var match in groupMatches) {
+        if (match['winner'] == 'player1' && match['player1Id'] == participant['id']) {
+          score += 2; // Win gives 2 points
+        } else if (match['winner'] == 'player2' && match['player2Id'] == participant['id']) {
+          score += 2;
+        }
+      }
+      participant['score'] = score;
+    }
+
+    // Sort by score (descending)
+    groupParticipants.sort((a, b) {
+      int scoreCompare = b['score'].compareTo(a['score']);
+      if (scoreCompare != 0) return scoreCompare;
+      return 0; // Add tiebreaker logic if needed
+    });
+
+    groupRankings[groupName] = groupParticipants.take(2).toList(); // Top 2 per group
+  }
+
+  // Generate knockout phase matches with actual players
+  final qualifiers = groupRankings.values.expand((list) => list).toList();
+  if (qualifiers.length < 2) {
+    print('DEBUG: Not enough qualifiers (${qualifiers.length}) for knockout phase');
+    return newMatches;
+  }
+
+  // Reset matchCounter and totalRound for knockout phase
+  matchCounter = 1;
+  totalRound = round;
+  qualifiers.shuffle(); // Random seeding
   for (int i = 0; i < currentRoundMatches; i++) {
+    final player1 = qualifiers[i * 2];
+    final player2 = i * 2 + 1 < qualifiers.length ? qualifiers[i * 2 + 1] : null;
     String matchId;
     Map<String, dynamic> match;
-    if (isDoubles) {
+
+    if (player2 == null) {
+      // Bye match
       matchId = 'knockout_match_${matchCounter}_r$knockoutRound';
       if (!existingMatches.containsKey(matchId)) {
         match = {
           'matchId': matchId,
-          'round': round,
+          'round': totalRound,
           'phase': 'knockout',
-          'team1': ['TBD'],
-          'team2': ['TBD'],
-          'team1Ids': [],
-          'team2Ids': [],
-          'completed': false,
-          'winner': null,
+          'player1': await _getDisplayName(player1['id']),
+          'player1Id': player1['id'],
+          'player2': 'Bye',
+          'player2Id': 'bye',
+          'completed': true,
+          'winner': 'player1',
           'umpire': {'name': '', 'email': '', 'phone': ''},
           'liveScores': {
-            'team1': [0, 0, 0],
-            'team2': [0, 0, 0],
+            'player1': [0, 0, 0],
+            'player2': [0, 0, 0],
             'currentGame': 1,
             'isLive': false,
-            'currentServer': 'team1',
+            'currentServer': 'player1',
           },
           'startTime': Timestamp.fromDate(DateTime(
             currentDate.year,
@@ -2000,8 +2222,8 @@ Future<List<Map<String, dynamic>>> _generateGroupKnockoutMatches({
             startMinute,
           )),
           'qualifierInfo': {
-            'team1': 'Group A #1',
-            'team2': 'Group A #2',
+            'player1': 'Group ${groupRankings.keys.firstWhere((k) => groupRankings[k]!.contains(player1))} #${groupRankings.values.firstWhere((v) => v.contains(player1)).indexOf(player1) + 1}',
+            'player2': 'Bye',
           },
         };
         newMatches.add(match);
@@ -2013,12 +2235,12 @@ Future<List<Map<String, dynamic>>> _generateGroupKnockoutMatches({
       if (!existingMatches.containsKey(matchId)) {
         match = {
           'matchId': matchId,
-          'round': round,
+          'round': totalRound,
           'phase': 'knockout',
-          'player1': 'TBD',
-          'player2': 'TBD',
-          'player1Id': null,
-          'player2Id': null,
+          'player1': await _getDisplayName(player1['id']),
+          'player2': await _getDisplayName(player2['id']),
+          'player1Id': player1['id'],
+          'player2Id': player2['id'],
           'completed': false,
           'winner': null,
           'umpire': {'name': '', 'email': '', 'phone': ''},
@@ -2037,8 +2259,8 @@ Future<List<Map<String, dynamic>>> _generateGroupKnockoutMatches({
             startMinute,
           )),
           'qualifierInfo': {
-            'player1': 'Group A #1',
-            'player2': 'Group A #2',
+            'player1': 'Group ${groupRankings.keys.firstWhere((k) => groupRankings[k]!.contains(player1))} #${groupRankings.values.firstWhere((v) => v.contains(player1)).indexOf(player1) + 1}',
+            'player2': 'Group ${groupRankings.keys.firstWhere((k) => groupRankings[k]!.contains(player2))} #${groupRankings.values.firstWhere((v) => v.contains(player2)).indexOf(player2) + 1}',
           },
         };
         newMatches.add(match);
@@ -2046,95 +2268,7 @@ Future<List<Map<String, dynamic>>> _generateGroupKnockoutMatches({
         currentDate = currentDate.add(const Duration(days: 1));
       }
     }
-    round++;
-  }
-
-  // Generate subsequent knockout rounds with TBD
-  currentRoundMatches ~/= 2;
-  knockoutRound++;
-  while (currentRoundMatches >= 1) {
-    for (int i = 0; i < currentRoundMatches; i++) {
-      String matchId;
-      Map<String, dynamic> match;
-      if (isDoubles) {
-        matchId = 'knockout_match_${matchCounter}_r$knockoutRound';
-        if (!existingMatches.containsKey(matchId)) {
-          match = {
-            'matchId': matchId,
-            'round': round,
-            'phase': 'knockout',
-            'team1': ['TBD'],
-            'team2': ['TBD'],
-            'team1Ids': [],
-            'team2Ids': [],
-            'completed': false,
-            'winner': null,
-            'umpire': {'name': '', 'email': '', 'phone': ''},
-            'liveScores': {
-              'team1': [0, 0, 0],
-              'team2': [0, 0, 0],
-              'currentGame': 1,
-              'isLive': false,
-              'currentServer': 'team1',
-            },
-            'startTime': Timestamp.fromDate(DateTime(
-              currentDate.year,
-              currentDate.month,
-              currentDate.day,
-              startHour,
-              startMinute,
-            )),
-            'qualifierInfo': {
-              'team1': 'Winner of Match ${matchCounter - currentRoundMatches}',
-              'team2': 'Winner of Match ${matchCounter - currentRoundMatches + 1}',
-            },
-          };
-          newMatches.add(match);
-          matchCounter++;
-          currentDate = currentDate.add(const Duration(days: 1));
-        }
-      } else {
-        matchId = 'knockout_match_${matchCounter}_r$knockoutRound';
-        if (!existingMatches.containsKey(matchId)) {
-          match = {
-            'matchId': matchId,
-            'round': round,
-            'phase': 'knockout',
-            'player1': 'TBD',
-            'player2': 'TBD',
-            'player1Id': null,
-            'player2Id': null,
-            'completed': false,
-            'winner': null,
-            'umpire': {'name': '', 'email': '', 'phone': ''},
-            'liveScores': {
-              'player1': [0, 0, 0],
-              'player2': [0, 0, 0],
-              'currentGame': 1,
-              'isLive': false,
-              'currentServer': 'player1',
-            },
-            'startTime': Timestamp.fromDate(DateTime(
-              currentDate.year,
-              currentDate.month,
-              currentDate.day,
-              startHour,
-              startMinute,
-            )),
-            'qualifierInfo': {
-              'player1': 'Winner of Match ${matchCounter - currentRoundMatches}',
-              'player2': 'Winner of Match ${matchCounter - currentRoundMatches + 1}',
-            },
-          };
-          newMatches.add(match);
-          matchCounter++;
-          currentDate = currentDate.add(const Duration(days: 1));
-        }
-      }
-      round++;
-    }
-    currentRoundMatches ~/= 2;
-    knockoutRound++;
+    totalRound++;
   }
 
   return newMatches;
@@ -2844,7 +2978,8 @@ Future<List<Map<String, dynamic>>> _generateSwissMatches({
 
     final competitors = _isDoublesTournament() ? _teams : _participants;
     if (competitors.length < 2) {
-      toastification.show(
+       if (!_canCreateMatches) {
+         toastification.show(
         context: context,
         type: ToastificationType.error,
         title: const Text('Insufficient Competitors'),
@@ -2854,14 +2989,17 @@ Future<List<Map<String, dynamic>>> _generateSwissMatches({
         foregroundColor: _textColor,
         alignment: Alignment.bottomCenter,
       );
+       }
       return;
     }
 
     dynamic selectedCompetitor1;
     dynamic selectedCompetitor2;
     DateTime selectedDate = widget.tournament.startDate;
-    TimeOfDay selectedTime = widget.tournament.startTime;
-
+    TimeOfDay selectedTime = TimeOfDay(
+  hour: widget.tournament.startDate.hour,
+  minute: widget.tournament.startDate.minute,
+);
     showDialog(
       context: context,
       builder: (_) => StatefulBuilder(
@@ -3463,17 +3601,15 @@ Future<List<Map<String, dynamic>>> _generateSwissMatches({
       }
     }
   }
+DateTime get _withdrawDeadline {
+  return widget.tournament.startDate.subtract(const Duration(days: 3));
+}
 
-  String _formatDateRange(DateTime startDate, DateTime? endDate) {
-    final start = DateFormat('MMM dd, yyyy').format(startDate);
-    if (endDate == null) return start;
-    if (startDate.year == endDate.year &&
-        startDate.month == endDate.month &&
-        startDate.day == endDate.day) {
-      return start;
-    }
-    return '$start - ${DateFormat('MMM dd, yyyy').format(endDate)}';
-  }
+bool get _canCreateMatches {
+  final now = DateTime.now().toUtc().add(const Duration(hours: 5, minutes: 30));
+  return now.isAfter(_withdrawDeadline);
+}
+
 
   @override
   Widget build(BuildContext context) {
@@ -3506,7 +3642,7 @@ Future<List<Map<String, dynamic>>> _generateSwissMatches({
                 background: Stack(
                   fit: StackFit.expand,
                   children: [
-                    widget.tournament.profileImage != null && widget.tournament.profileImage!.isNotEmpty
+                    _tournamentProfileImage != null && _tournamentProfileImage!.isNotEmpty
                         ? Image.network(
                             widget.tournament.profileImage!,
                             fit: BoxFit.cover,
@@ -3557,10 +3693,10 @@ Future<List<Map<String, dynamic>>> _generateSwissMatches({
                 const SizedBox(height: 5),
     
                
-                if (_hasJoined || isCreator) ...[
+               
                   const SizedBox(height: 10),
                   _buildTournamentTabs(isCreator),
-                ],
+                
               ],
             ),
           ),
@@ -3702,44 +3838,7 @@ Future<List<Map<String, dynamic>>> _generateSwissMatches({
   );
 }
 
-  Widget _buildActionButton({
-    required String text,
-    required VoidCallback? onPressed,
-  }) {
-    return SizedBox(
-      width: double.infinity,
-      child: ElevatedButton.icon(
-        style: ElevatedButton.styleFrom(
-          backgroundColor: _accentColor,
-          foregroundColor: _textColor,
-          padding: const EdgeInsets.symmetric(vertical: 16),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
-          elevation: 4,
-        ),
-        onPressed: _isLoading ? null : onPressed,
-        label: _isLoading
-            ? const SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(
-                  color: Colors.white,
-                  strokeWidth: 2,
-                ),
-              )
-            : Text(
-                text,
-                style: GoogleFonts.poppins(
-                  color: _textColor,
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: 0.5,
-                ),
-              ),
-      ),
-    );
-  }
+  
 
   Widget _buildWithdrawSection(bool canWithdraw, DateTime withdrawDeadline, BuildContext context) {
     return Column(
@@ -3810,7 +3909,7 @@ Future<List<Map<String, dynamic>>> _generateSwissMatches({
       ),
       const SizedBox(height: 10),
       SizedBox(
-        height: MediaQuery.of(context).size.height * 0.4,
+        height: MediaQuery.of(context).size.height * 0.6,
         child: TabBarView(
           controller: _tabController,
           children: [
@@ -3825,11 +3924,59 @@ Future<List<Map<String, dynamic>>> _generateSwissMatches({
   );
 }
 
+tz.Location _getLocation(String timezoneName) {
+  try {
+    return tz.getLocation(timezoneName);
+  } catch (e) {
+    // Fallback to UTC if the timezone is not found
+    return tz.getLocation('UTC');
+  }
+}
+
+
 Widget _buildInfoTab() {
   final tournament = widget.tournament;
   final timeFormat = DateFormat('h:mm a');
+  final dateFormat = DateFormat('MMM d, yyyy');
+  
+  // Get the timezone from tournament data or default to local timezone
+  final timezone = tournament.timezone;
+  final tzLocation = timezone.isNotEmpty 
+      ? timezone 
+      : 'UTC';
 
-  final String defaultBadmintonRules = '''
+  // Helper function to format datetime with timezone
+  String formatTimeWithTimezone(DateTime dateTime) {
+    try {
+      final localTime = tz.TZDateTime.from(dateTime, _getLocation(tzLocation));
+      return '${timeFormat.format(localTime)} ($tzLocation)';
+    } catch (e) {
+      // Fallback if timezone conversion fails
+      return '${timeFormat.format(dateTime)} (Local Time)';
+    }
+  }
+
+  String formatDateRange(DateTime start, DateTime end) {
+    try {
+      final startLocal = TZDateTime.from(start, _getLocation(tzLocation));
+      final endLocal = TZDateTime.from(end, _getLocation(tzLocation));
+      
+      if (startLocal.year == endLocal.year && 
+          startLocal.month == endLocal.month && 
+          startLocal.day == endLocal.day) {
+        return dateFormat.format(startLocal);
+      }
+      return '${dateFormat.format(startLocal)} - ${dateFormat.format(endLocal)}';
+    } catch (e) {
+      // Fallback if timezone conversion fails
+      if (start.year == end.year && start.month == end.month && start.day == end.day) {
+        return dateFormat.format(start);
+      }
+      return '${dateFormat.format(start)} - ${dateFormat.format(end)}';
+    }
+  }
+
+  const String defaultBadmintonRules = '''
 1. Matches follow BWF regulations - best of 3 games to 21 points (rally point scoring)
 2. Players must report 15 minutes before scheduled match time
 3. Proper sports attire and non-marking shoes required
@@ -3873,19 +4020,13 @@ Widget _buildInfoTab() {
                 _buildDetailRow(
                   icon: Icons.calendar_today_outlined,
                   title: 'Dates',
-                  value: _formatDateRange(tournament.startDate, tournament.endDate),
+                  value: formatDateRange(tournament.startDate, tournament.endDate!),
                 ),
                 const Divider(height: 24),
                 _buildDetailRow(
                   icon: Icons.access_time_outlined,
                   title: 'Start Time',
-                  value: timeFormat.format(DateTime(
-                    tournament.startDate.year,
-                    tournament.startDate.month,
-                    tournament.startDate.day,
-                    tournament.startTime.hour,
-                    tournament.startTime.minute,
-                  )),
+                  value: formatTimeWithTimezone(tournament.startDate),
                 ),
                 const Divider(height: 24),
                 _buildDetailRow(
@@ -3894,6 +4035,19 @@ Widget _buildInfoTab() {
                   value: (tournament.venue.isNotEmpty && tournament.city.isNotEmpty)
                       ? '${tournament.venue}, ${tournament.city}'
                       : 'Location not specified',
+                  // ignore: unnecessary_null_comparison
+                  trailing: tournament.timezone != null 
+                      ? Chip(
+                          visualDensity: VisualDensity.compact,
+                          backgroundColor: Theme.of(context).colorScheme.surfaceVariant,
+                          label: Text(
+                            tournament.timezone,
+                            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                              color: Theme.of(context).colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        )
+                      : null,
                 ),
               ],
             ),
@@ -3954,6 +4108,22 @@ Widget _buildInfoTab() {
                     ? 'Free entry' 
                     : '₹${tournament.entryFee.toStringAsFixed(0)}',
                 ),
+                if (tournament.bringOwnEquipment) ...[
+                  const Divider(height: 24),
+                  _buildDetailRow(
+                    icon: Icons.sports_tennis_outlined,
+                    title: 'Equipment',
+                    value: 'Players must bring their own equipment',
+                  ),
+                ],
+                if (tournament.costShared) ...[
+                  const Divider(height: 24),
+                  _buildDetailRow(
+                    icon: Icons.attach_money_outlined,
+                    title: 'Cost Sharing',
+                    value: 'Court costs shared among participants',
+                  ),
+                ],
               ],
             ),
           ),
@@ -3980,8 +4150,8 @@ Widget _buildInfoTab() {
                   style: TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.w600,
-                    color: _primaryColor,
-                ),
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
                 ),
                 const SizedBox(height: 12),
                 Text(
@@ -4003,7 +4173,6 @@ Widget _buildInfoTab() {
     ),
   );
 }
-
 Widget _buildDetailRow({
   required IconData icon,
   required String title,
@@ -4045,339 +4214,525 @@ Widget _buildDetailRow({
   );
 }
 
+
 Widget _buildMatchesTab(bool isCreator) {
-  final now = DateTime.now().toUtc().add(const Duration(hours: 5, minutes: 30));
-  final isClosed = widget.tournament.endDate != null && widget.tournament.endDate!.isBefore(now);
+  final tournament = widget.tournament;
+  final timezoneLocation = tz.getLocation(tournament.timezone);
+  final now = tz.TZDateTime.now(timezoneLocation);
+  final isClosed = tournament.endDate != null &&
+      tz.TZDateTime.from(tournament.endDate!, timezoneLocation).isBefore(now);
 
-  // Determine tournament format (knockout, group, or group + knockout)
-  final isKnockout = widget.tournament.gameType.toLowerCase().contains('knockout');
-  final isGroupStage = widget.tournament.gameType.toLowerCase().contains('group');
-
-  // Group matches by round or group
-  Map<String, List<Map<String, dynamic>>> groupedMatches = {};
+  // Group matches by round
+  final matchesByRound = <int, List<Map<String, dynamic>>>{};
   for (var match in _matches) {
-    String key;
-    if (isGroupStage && match['group'] != null) {
-      key = match['group'].toString(); // Use toString() for safety
-    } else {
-      key = match['round'].toString(); // Use toString() for safety
-    }
-    groupedMatches.putIfAbsent(key, () => []).add(match);
+    final round = match['round'] as int? ?? 1;
+    matchesByRound.putIfAbsent(round, () => []).add(match);
   }
 
-  // Determine the last round for knockout tournaments
-  String? finalRoundKey;
-  if (isKnockout) {
-    final rounds = groupedMatches.keys.map((k) => int.tryParse(k) ?? 0).toList();
-    if (rounds.isNotEmpty) {
-      final maxRound = rounds.reduce((a, b) => a > b ? a : b);
-      finalRoundKey = maxRound.toString();
+  // Sort rounds to ensure consistent order (e.g., [1, 2] for Round 1 and Final)
+  final sortedRounds = matchesByRound.keys.toList()..sort();
+
+  // Initialize currentRound as state variable
+  int currentRound = sortedRounds.isNotEmpty ? sortedRounds.first : 1;
+  if (matchesByRound.isNotEmpty) {
+    for (var round in sortedRounds) {
+      final roundMatches = matchesByRound[round]!;
+      final hasUpcoming = roundMatches.any((match) {
+        final startTime = match['startTime'] as Timestamp?;
+        if (startTime == null) return false;
+        final matchTime = tz.TZDateTime.from(startTime.toDate(), timezoneLocation);
+        return matchTime.isAfter(now) || 
+               (matchTime.isBefore(now) && match['completed'] != true);
+      });
+      if (hasUpcoming) {
+        currentRound = round;
+        break;
+      }
+    }
+    // If no upcoming matches, show the first round (not last)
+    if (currentRound == sortedRounds.first && sortedRounds.length > 1) {
+      currentRound = sortedRounds.first; // Ensure Round 1 is selected if no upcoming matches
     }
   }
 
-  return Column(
-    children: [
-      if (isCreator && !isClosed)
-        Column(
-          children: [
-            if (_matches.isNotEmpty && !_showMatchGenerationOptions)
-              Align(
-                alignment: Alignment.centerRight,
-                child: IconButton(
-                  icon: Icon(Icons.restart_alt, color: _errorColor),
-                  onPressed: _isLoading ? null : _resetMatches,
-                  tooltip: 'Reset Matches',
-                ),
-              ),
-            if (_matches.isEmpty || _showMatchGenerationOptions)
-              Column(
-                children: [
-                  const SizedBox(height: 8),
-                  Text(
-                    'Select Match Generation Method',
-                    style: GoogleFonts.poppins(
-                      color: _textColor,
-                      fontWeight: FontWeight.w600,
+  // Debug print to verify initial values
+  debugPrint('sortedRounds: $sortedRounds, currentRound: $currentRound, initialPage: ${sortedRounds.indexOf(currentRound)}');
+
+  // Create a PageController that jumps to the current round
+  final pageController = PageController(
+    initialPage: sortedRounds.indexOf(currentRound),
+    viewportFraction: 0.95,
+  );
+
+  // Track selected match generation method
+  String? selectedGenerationMethod;
+
+  return StatefulBuilder(
+    builder: (context, setState) {
+      return Column(
+        children: [
+          if (isCreator && !isClosed)
+            Column(
+              children: [
+                if (_matches.isNotEmpty && !_showMatchGenerationOptions && _canCreateMatches)
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: IconButton(
+                      icon: Icon(Icons.restart_alt, color: _errorColor),
+                      onPressed: _isLoading ? null : _resetMatches,
+                      tooltip: 'Reset Matches',
                     ),
                   ),
-                  const SizedBox(height: 8),
-                  Row(
+                if ((_matches.isEmpty || _showMatchGenerationOptions) && _canCreateMatches)
+                  Column(
                     children: [
-                      Expanded(
-                        child: _buildActionButton(
-                          text: 'AUTO SCHEDULE',
-                          onPressed: _isLoading ? null : _generateMatches,
+                      Text(
+                        'Select Match Generation Method',
+                        style: GoogleFonts.poppins(
+                          color: _textColor,
+                          fontWeight: FontWeight.w600,
                         ),
                       ),
-                      const SizedBox(width: 8),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _buildActionButton(
+                              text: 'AUTO SCHEDULE',
+                              onPressed: _isLoading
+                                  ? null
+                                  : () {
+                                      setState(() {
+                                        selectedGenerationMethod = 'AUTO';
+                                      });
+                                      _generateMatches();
+                                    },
+                              isSelected: selectedGenerationMethod == 'AUTO',
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: _buildActionButton(
+                              text: 'MANUAL MATCH',
+                              onPressed: _isLoading
+                                  ? null
+                                  : () {
+                                      setState(() {
+                                        selectedGenerationMethod = 'MANUAL';
+                                      });
+                                      _showManualMatchDialog(isCreator);
+                                    },
+                              isSelected: selectedGenerationMethod == 'MANUAL',
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+              ],
+            ),
+          if (!_canCreateMatches)
+            Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: Text(
+                'Match creation will be available after ${DateFormat('MMM dd, yyyy').format(_withdrawDeadline)}',
+                style: GoogleFonts.poppins(
+                  color: _secondaryText,
+                  fontStyle: FontStyle.italic,
+                ),
+              ),
+            ),
+          Expanded(
+            child: _matches.isEmpty && (!isCreator || !_canCreateMatches)
+                ? _buildEmptyState(
+                    icon: Icons.schedule,
+                    title: 'No Matches Scheduled',
+                    description: isCreator && _canCreateMatches
+                        ? 'Reset or select a match generation method'
+                        : isCreator
+                            ? 'Match creation will be available after ${DateFormat('MMM dd, yyyy').format(_withdrawDeadline)}'
+                            : 'Waiting for organizer to schedule matches',
+                  )
+                : Column(
+                    children: [
+                      // Round indicator tabs
+                      SizedBox(
+                        height: 50,
+                        child: ListView.builder(
+                          scrollDirection: Axis.horizontal,
+                          itemCount: sortedRounds.length,
+                          itemBuilder: (context, index) {
+                            final round = sortedRounds[index];
+                            final isCurrent = round == currentRound;
+                            return Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 8.0),
+                              child: ChoiceChip(
+                                label: Row(
+                                  children: [
+                                    Text(
+                                      round == sortedRounds.last && sortedRounds.length > 1
+                                          ? 'Final'
+                                          : 'Round $round',
+                                      style: GoogleFonts.poppins(
+                                        fontSize: 14,
+                                        fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
+                                        color: isCurrent ? Colors.white : _textColor,
+                                      ),
+                                    ),
+                                   
+                                  ],
+                                ),
+                                selected: isCurrent,
+                                selectedColor: _accentColor, // Orange color for selected round
+                                backgroundColor: _secondaryColor.withOpacity(0.3),
+                                onSelected: (_) {
+                                  pageController.animateToPage(
+                                    index,
+                                    duration: const Duration(milliseconds: 300),
+                                    curve: Curves.easeInOut,
+                                  );
+                                },
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      // Matches pages
                       Expanded(
-                        child: _buildActionButton(
-                          text: 'MANUAL MATCH',
-                          onPressed: _isLoading ? null : () => _showManualMatchDialog(isCreator),
+                        child: PageView.builder(
+                          controller: pageController,
+                          itemCount: sortedRounds.length,
+                          onPageChanged: (index) {
+                            setState(() {
+                              currentRound = sortedRounds[index];
+                              debugPrint('Page changed to index: $index, currentRound: $currentRound');
+                            });
+                          },
+                          itemBuilder: (context, index) {
+                            final round = sortedRounds[index];
+                            final roundMatches = matchesByRound[round]!;
+                            final isFinalRound = round == sortedRounds.last && sortedRounds.length > 1;
+                            
+                            return _buildRoundMatchesPage(
+                              round: round,
+                              matches: roundMatches,
+                              isFinalRound: isFinalRound,
+                              isCreator: isCreator,
+                              timezoneLocation: timezoneLocation,
+                            );
+                          },
                         ),
                       ),
                     ],
                   ),
-                ],
-              ),
-          ],
-        ),
-      Expanded(
-        child: groupedMatches.isEmpty && !_showMatchGenerationOptions
-            ? _buildEmptyState(
-                icon: Icons.schedule,
-                title: 'No Matches Scheduled',
-                description: isCreator
-                    ? 'Reset or select a match generation method'
-                    : 'Waiting for organizer to schedule matches',
-              )
-            : ListView.builder(
-                key: _matchesListKey,
-                physics: const BouncingScrollPhysics(),
-                itemCount: groupedMatches.length,
-                itemBuilder: (context, index) {
-                  final groupKey = groupedMatches.keys.elementAt(index);
-                  final matches = groupedMatches[groupKey]!;
-                  // Label the last round as "Final" for knockout tournaments
-                  final isFinalRound = isKnockout && groupKey == finalRoundKey;
-                  final headerText = isGroupStage && !isKnockout
-                      ? 'Group $groupKey'
-                      : isFinalRound
-                          ? 'Final'
-                          : 'Round $groupKey';
+          ),
+        ],
+      );
+    },
+  );
+}
 
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-                        child: Text(
-                          headerText,
-                          style: GoogleFonts.poppins(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                            color: _secondaryColor,
+Widget _buildRoundMatchesPage({
+  required int round,
+  required List<Map<String, dynamic>> matches,
+  required bool isFinalRound,
+  required bool isCreator,
+  required tz.Location timezoneLocation,
+}) {
+  final now = tz.TZDateTime.now(timezoneLocation);
+  final timeFormat = DateFormat('h:mm a');
+  final dateFormat = DateFormat('MMM d, yyyy');
+  final isDoubles = _isDoublesTournament();
+  
+
+  return Container(
+    margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+    decoration: BoxDecoration(
+      color: _cardBackground,
+      borderRadius: BorderRadius.circular(16),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withOpacity(0.1),
+          blurRadius: 8,
+          offset: const Offset(0, 4),
+        ),
+      ],
+    ),
+    child: SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Center(
+            child: Text(
+              isFinalRound ? 'FINAL ROUND' : 'ROUND $round',
+              style: GoogleFonts.poppins(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: _accentColor,
+                letterSpacing: 1.2,
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          ...matches.asMap().entries.map((entry) {
+            final matchIndex = entry.key;
+            final match = entry.value;
+            final isCompleted = match['completed'] == true;
+            final isLive = match['liveScores']?['isLive'] == true;
+            final currentGame = match['liveScores']?['currentGame'] ?? 1;
+
+            final team1Score = isDoubles
+                ? (match['liveScores']?['team1'] as List<dynamic>?)?.isNotEmpty == true
+                    ? match['liveScores']['team1'][currentGame - 1] ?? 0
+                    : 0
+                : (match['liveScores']?['player1'] as List<dynamic>?)?.isNotEmpty == true
+                    ? match['liveScores']['player1'][currentGame - 1] ?? 0
+                    : 0;
+            final team2Score = isDoubles
+                ? (match['liveScores']?['team2'] as List<dynamic>?)?.isNotEmpty == true
+                    ? match['liveScores']['team2'][currentGame - 1] ?? 0
+                    : 0
+                : (match['liveScores']?['player2'] as List<dynamic>?)?.isNotEmpty == true
+                    ? match['liveScores']['player2'][currentGame - 1] ?? 0
+                    : 0;
+
+            // Format match time with timezone
+            String dateString = 'Date not available';
+            String? countdownString;
+            final Timestamp? startTime = match['startTime'];
+            if (startTime != null) {
+              final matchTime = tz.TZDateTime.from(startTime.toDate(), timezoneLocation);
+              dateString = '${dateFormat.format(matchTime)} at ${timeFormat.format(matchTime)} ';
+
+              if (!isLive && !isCompleted) {
+                final difference = matchTime.difference(now);
+                if (difference.isNegative) {
+                  countdownString = 'Should have started';
+                } else if (difference.inHours >= 24) {
+                  final days = difference.inDays;
+                  final hours = difference.inHours % 24;
+                  countdownString = 'Starts in ${days}d ${hours}h';
+                } else {
+                  final hours = difference.inHours;
+                  final minutes = difference.inMinutes % 60;
+                  countdownString = 'Starts in ${hours}h ${minutes}m';
+                }
+              }
+            }
+
+            return AnimationConfiguration.staggeredList(
+              position: matchIndex,
+              duration: const Duration(milliseconds: 400),
+              child: SlideAnimation(
+                verticalOffset: 30.0,
+                child: FadeInAnimation(
+                  child: GestureDetector(
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => MatchDetailsPage(
+                            tournamentId: widget.tournament.id,
+                            match: match,
+                            matchIndex: _matches.indexOf(match),
+                            isCreator: isCreator,
+                            isDoubles: isDoubles,
+                            isUmpire: _isUmpire,
+                            onDeleteMatch: () => _deleteMatch(_matches.indexOf(match)),
                           ),
                         ),
+                      );
+                    },
+                    child: Container(
+                      margin: const EdgeInsets.only(bottom: 16),
+                      decoration: BoxDecoration(
+                        color: _secondaryColor.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: isLive 
+                              ? _successColor 
+                              : isCompleted 
+                                  ? _accentColor.withOpacity(0.3) 
+                                  : _secondaryColor.withOpacity(0.3),
+                          width: 2,
+                        ),
                       ),
-                      ...matches.asMap().entries.map((entry) {
-                        final matchIndex = entry.key;
-                        final match = entry.value;
-                        final isDoubles = _isDoublesTournament();
-                        final isCompleted = match['completed'] == true;
-                        final isLive = match['liveScores']?['isLive'] == true;
-                        final currentGame = match['liveScores']?['currentGame'] ?? 1;
-
-                        final team1Score = isDoubles
-                            ? (match['liveScores']?['team1'] as List<dynamic>?)?.isNotEmpty == true
-                                ? match['liveScores']['team1'][currentGame - 1] ?? 0
-                                : 0
-                            : (match['liveScores']?['player1'] as List<dynamic>?)?.isNotEmpty == true
-                                ? match['liveScores']['player1'][currentGame - 1] ?? 0
-                                : 0;
-                        final team2Score = isDoubles
-                            ? (match['liveScores']?['team2'] as List<dynamic>?)?.isNotEmpty == true
-                                ? match['liveScores']['team2'][currentGame - 1] ?? 0
-                                : 0
-                            : (match['liveScores']?['player2'] as List<dynamic>?)?.isNotEmpty == true
-                                ? match['liveScores']['player2'][currentGame - 1] ?? 0
-                                : 0;
-
-                        final Timestamp? startTime = match['startTime'];
-                        final String dateString = startTime != null
-                            ? DateFormat('MMM dd, yyyy HH:mm').format(startTime.toDate().toLocal())
-                            : 'Date not available';
-
-                        return AnimationConfiguration.staggeredList(
-                          position: matchIndex,
-                          duration: const Duration(milliseconds: 400),
-                          child: SlideAnimation(
-                            verticalOffset: 30.0,
-                            child: FadeInAnimation(
-                              child: GestureDetector(
-                                onTap: () {
-                                  Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (_) => MatchDetailsPage(
-                                        tournamentId: widget.tournament.id,
-                                        match: match,
-                                        matchIndex: _matches.indexOf(match),
-                                        isCreator: isCreator,
-                                        isDoubles: isDoubles,
-                                        isUmpire: _isUmpire,
-                                        onDeleteMatch: () => _deleteMatch(_matches.indexOf(match)),
-                                      ),
-                                    ),
-                                  );
-                                },
-                                child: Container(
-                                  margin: const EdgeInsets.only(bottom: 12, left: 16, right: 16),
-                                  decoration: BoxDecoration(
-                                    color: _cardBackground,
-                                    borderRadius: BorderRadius.circular(12),
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: Colors.black.withOpacity(0.1),
-                                        blurRadius: 8,
-                                        offset: const Offset(0, 4),
-                                      ),
-                                    ],
-                                  ),
+                      child: Column(
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.all(12),
+                            child: Row(
+                              children: [
+                                Expanded(
                                   child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
-                                      Container(
-                                        padding: const EdgeInsets.all(12),
-                                        decoration: BoxDecoration(
-                                          color: _secondaryColor.withOpacity(0.3),
-                                          borderRadius: const BorderRadius.only(
-                                            topLeft: Radius.circular(12),
-                                            topRight: Radius.circular(12),
-                                          ),
+                                      Text(
+                                        isDoubles
+                                            ? match['team1'].join(' & ')
+                                            : match['player1'],
+                                        style: GoogleFonts.poppins(
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.w600,
+                                          color: _textColor,
                                         ),
-                                        child: Row(
-                                          children: [
-                                            Container(
-                                              width: 36,
-                                              height: 36,
-                                              decoration: BoxDecoration(
-                                                shape: BoxShape.circle,
-                                                color: _accentColor.withOpacity(0.2),
-                                                border: Border.all(color: _accentColor),
-                                              ),
-                                              child: Center(
-                                                child: Text(
-                                                  isFinalRound ? 'F' : 'R${match['round']}',
-                                                  style: GoogleFonts.poppins(
-                                                    fontSize: 14,
-                                                    fontWeight: FontWeight.w600,
-                                                    color: _accentColor,
-                                                  ),
-                                                ),
-                                              ),
-                                            ),
-                                            const SizedBox(width: 12),
-                                            Expanded(
-                                              child: Column(
-                                                crossAxisAlignment: CrossAxisAlignment.start,
-                                                children: [
-                                                  Text(
-                                                    isDoubles
-                                                        ? match['team1'].join(' & ')
-                                                        : match['player1'],
-                                                    style: GoogleFonts.poppins(
-                                                      fontSize: 14,
-                                                      fontWeight: FontWeight.w600,
-                                                      color: _textColor,
-                                                    ),
-                                                    maxLines: 1,
-                                                    overflow: TextOverflow.ellipsis,
-                                                  ),
-                                                  const SizedBox(height: 4),
-                                                  Text(
-                                                    isDoubles
-                                                        ? match['team2'].join(' & ')
-                                                        : match['player2'],
-                                                    style: GoogleFonts.poppins(
-                                                      fontSize: 14,
-                                                      fontWeight: FontWeight.w600,
-                                                      color: _textColor,
-                                                    ),
-                                                    maxLines: 1,
-                                                    overflow: TextOverflow.ellipsis,
-                                                  ),
-                                                ],
-                                              ),
-                                            ),
-                                            Column(
-                                              children: [
-                                                Text(
-                                                  '$team1Score',
-                                                  style: GoogleFonts.poppins(
-                                                    fontSize: 16,
-                                                    fontWeight: FontWeight.w700,
-                                                    color: isLive && team1Score > team2Score
-                                                        ? _successColor
-                                                        : _textColor,
-                                                  ),
-                                                ),
-                                                const SizedBox(height: 4),
-                                                Text(
-                                                  '$team2Score',
-                                                  style: GoogleFonts.poppins(
-                                                    fontSize: 16,
-                                                    fontWeight: FontWeight.w700,
-                                                    color: isLive && team2Score > team1Score
-                                                        ? _successColor
-                                                        : _textColor,
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                          ],
-                                        ),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
                                       ),
-                                      Padding(
-                                        padding: const EdgeInsets.all(12),
-                                        child: Row(
-                                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                          children: [
-                                            Row(
-                                              children: [
-                                                Icon(
-                                                  isLive
-                                                      ? Icons.videocam
-                                                      : isCompleted
-                                                          ? Icons.check_circle
-                                                          : Icons.schedule,
-                                                  color: isLive
-                                                      ? _successColor
-                                                      : isCompleted
-                                                          ? _successColor
-                                                          : _secondaryText,
-                                                  size: 20,
-                                                ),
-                                                const SizedBox(width: 8),
-                                                Text(
-                                                  isLive
-                                                      ? 'Live - Game $currentGame'
-                                                      : isCompleted
-                                                          ? 'Completed'
-                                                          : dateString,
-                                                  style: GoogleFonts.poppins(
-                                                    fontSize: 12,
-                                                    color: _secondaryText,
-                                                    fontWeight: FontWeight.w500,
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                            if (isCreator && !isCompleted)
-                                              IconButton(
-                                                icon: Icon(Icons.delete, color: _errorColor),
-                                                onPressed: () => _showDeleteConfirmation(context, _matches.indexOf(match)),
-                                              ),
-                                          ],
+                                      const SizedBox(height: 8),
+                                      Text(
+                                        isDoubles
+                                            ? match['team2'].join(' & ')
+                                            : match['player2'],
+                                        style: GoogleFonts.poppins(
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.w600,
+                                          color: _textColor,
                                         ),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
                                       ),
                                     ],
                                   ),
                                 ),
-                              ),
+                                Column(
+                                  children: [
+                                    Text(
+                                      '$team1Score',
+                                      style: GoogleFonts.poppins(
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.w700,
+                                        color: isLive && team1Score > team2Score
+                                            ? _successColor
+                                            : _textColor,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    Text(
+                                      '$team2Score',
+                                      style: GoogleFonts.poppins(
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.w700,
+                                        color: isLive && team2Score > team1Score
+                                            ? _successColor
+                                            : _textColor,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
                             ),
                           ),
-                        );
-                      
-                    }),
-                    ],
-                  );
-                },
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: _secondaryColor.withOpacity(0.2),
+                              borderRadius: const BorderRadius.only(
+                                bottomLeft: Radius.circular(10),
+                                bottomRight: Radius.circular(10),
+                              ),
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Row(
+                                  children: [
+                                    Icon(
+                                      isLive
+                                          ? Icons.videocam
+                                          : isCompleted
+                                              ? Icons.check_circle
+                                              : Icons.schedule,
+                                      color: isLive
+                                          ? _successColor
+                                          : isCompleted
+                                              ? _successColor
+                                              : _secondaryText,
+                                      size: 20,
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          dateString,
+                                          style: GoogleFonts.poppins(
+                                            fontSize: 12,
+                                            color: _secondaryText,
+                                            fontWeight: FontWeight.w500,
+                                          ),
+                                        ),
+                                        if (countdownString != null)
+                                          Text(
+                                            countdownString,
+                                            style: GoogleFonts.poppins(
+                                              fontSize: 12,
+                                              color: _secondaryText,
+                                              fontWeight: FontWeight.w500,
+                                            ),
+                                          ),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                                if (isCreator && !isCompleted)
+                                  IconButton(
+                                    icon: Icon(
+                                      Icons.delete,
+                                      color: _errorColor,
+                                      size: 20,
+                                    ),
+                                    onPressed: () =>
+                                        _showDeleteConfirmation(context, _matches.indexOf(match)),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
               ),
-      )]  );
-
+            );
+          }),
+        ],
+      ),
+    ),
+  );
 }
 
-
+Widget _buildActionButton({
+  required String text,
+  required VoidCallback? onPressed,
+  bool isSelected = false,
+}) {
+  return GestureDetector(
+    onTap: onPressed,
+    child: Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: isSelected ? _accentColor : _secondaryColor.withOpacity(0.3),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: isSelected ? _accentColor : _secondaryColor,
+          width: 1.5,
+        ),
+      ),
+      child: Text(
+        text,
+        style: GoogleFonts.poppins(
+          fontSize: 14,
+          fontWeight: FontWeight.w600,
+          color: isSelected ? Colors.white : _textColor,
+        ),
+        textAlign: TextAlign.center,
+      ),
+    ),
+  );
+}
  Widget _buildPlayersTab() {
   final isDoubles = widget.tournament.gameFormat == 'Doubles';
   final competitors = isDoubles ? widget.tournament.teams : widget.tournament.participants;
@@ -4440,8 +4795,10 @@ Widget _buildMatchesTab(bool isCreator) {
                         child: FadeInAnimation(
                           child: _buildPlayerTile(
                             name: 'Loading...',
+                            email: null,
                             score: isDoubles ? null : competitor['score'] ?? 0,
                             isCreator: isCreator,
+                            competitorId: isDoubles ? competitor['teamId'] : competitor['id'],
                             onDelete: () => _deleteParticipant(
                                 isDoubles ? competitor['teamId'] : competitor['id']),
                           ),
@@ -4459,8 +4816,10 @@ Widget _buildMatchesTab(bool isCreator) {
                         child: FadeInAnimation(
                           child: _buildPlayerTile(
                             name: 'Unknown Player',
+                            email: null,
                             score: isDoubles ? null : competitor['score'] ?? 0,
                             isCreator: isCreator,
+                            competitorId: isDoubles ? competitor['teamId'] : competitor['id'],
                             onDelete: () => _deleteParticipant(
                                 isDoubles ? competitor['teamId'] : competitor['id']),
                           ),
@@ -4472,6 +4831,7 @@ Widget _buildMatchesTab(bool isCreator) {
                   final userData = snapshot.data!.data() as Map<String, dynamic>;
                   final firstName = userData['firstName'] ?? 'Unknown';
                   final lastName = userData['lastName'] ?? '';
+                  final email = userData['email'] ?? '';
                   final name = '$firstName $lastName'.trim();
 
                   return AnimationConfiguration.staggeredList(
@@ -4486,8 +4846,10 @@ Widget _buildMatchesTab(bool isCreator) {
                                   .map((p) => '${p['firstName']} ${p['lastName']}'.trim())
                                   .join(' & ')
                               : name,
+                          email: isCreator ? email : null,
                           score: isDoubles ? null : competitor['score'] ?? 0,
                           isCreator: isCreator,
+                          competitorId: isDoubles ? competitor['teamId'] : competitor['id'],
                           onDelete: () => _deleteParticipant(
                               isDoubles ? competitor['teamId'] : competitor['id']),
                         ),
@@ -4506,8 +4868,10 @@ Widget _buildMatchesTab(bool isCreator) {
 
 Widget _buildPlayerTile({
   required String name,
+  String? email,
   int? score,
-  bool isCreator = false,
+  required bool isCreator,
+  required String competitorId,
   VoidCallback? onDelete,
 }) {
   return Container(
@@ -4538,15 +4902,27 @@ Widget _buildPlayerTile({
           color: _textColor,
         ),
       ),
-      subtitle: score != null
-          ? Text(
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (score != null)
+            Text(
               'Score: $score',
               style: GoogleFonts.poppins(
                 fontSize: 12,
                 color: _secondaryText,
               ),
-            )
-          : null,
+            ),
+          if (isCreator && email != null && email.isNotEmpty)
+            Text(
+              email,
+              style: GoogleFonts.poppins(
+                fontSize: 12,
+                color: _secondaryText,
+              ),
+            ),
+        ],
+      ),
       trailing: isCreator
           ? IconButton(
               icon: Icon(Icons.delete, color: _errorColor),
@@ -4556,6 +4932,7 @@ Widget _buildPlayerTile({
     ),
   );
 }
+
 Future<void> _deleteParticipant(int competitorId) async {
   if (_isLoading) return;
   final authState = context.read<AuthBloc>().state;
@@ -4663,15 +5040,32 @@ Widget _buildLeaderboardTab() {
     itemCount: groups.length,
     itemBuilder: (context, groupIndex) {
       final groupLabel = String.fromCharCode(65 + groupIndex); // A, B, C, etc.
+      final groupCompetitors = groups[groupIndex];
 
-      // Filter leaderboard data for this group
-      final groupLeaderboard = _leaderboardData.entries
-          .where((entry) => entry.value['group'] == groupIndex)
+      // Compute leaderboard data for this group
+      final groupLeaderboard = groupCompetitors
+          .asMap()
+          .entries
+          .map((entry) {
+            final competitor = entry.value;
+            return MapEntry(
+              isDoubles ? competitor['teamId'] : competitor['id'],
+              {
+                'name': isDoubles
+                    ? competitor['players']
+                        .map((p) => '${p['firstName']} ${p['lastName']}'.trim())
+                        .join(' & ')
+                    : competitor['name'],
+                'score': competitor['score'] ?? 0,
+                'group': groupIndex,
+              },
+            );
+          })
           .toList()
         ..sort((a, b) {
           final scoreCompare = b.value['score'].compareTo(a.value['score']);
           if (scoreCompare != 0) return scoreCompare;
-          return a.value['name'].compareTo(b.value['name']); // Alphabetical if scores are tied
+          return a.value['name'].compareTo(b.value['name']);
         });
 
       return Column(

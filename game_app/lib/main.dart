@@ -12,12 +12,13 @@ import 'package:game_app/player_pages/playerhomepage.dart';
 import 'package:game_app/screens/splash_screen.dart';
 import 'package:game_app/umpire/umpirehomepage.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:geolocator/geolocator.dart'; // Import geolocator
+import 'package:geolocator/geolocator.dart';
+import 'package:timezone/data/latest.dart' as tz; // Import geolocator
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
-  // Set system UI overlay style
+  SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+  tz.initializeTimeZones();
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
@@ -129,7 +130,9 @@ class AuthWrapper extends StatelessWidget {
           if (state.appUser == null) {
             Navigator.pushAndRemoveUntil(
               context,
-              MaterialPageRoute(builder: (_) => const ProfileCompletionScreen()),
+              MaterialPageRoute(
+                builder: (_) => const ProfileCompletionScreen(),
+              ),
               (route) => false,
             );
           } else {

@@ -1,8 +1,14 @@
+import java.util.Properties
+
 plugins {
-    id("com.android.application") // Keep only this for an Android app
+    id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("com.google.gms.google-services")
     id("dev.flutter.flutter-gradle-plugin")
+}
+
+val keystoreProperties = Properties().apply {
+    load(File(rootDir, "key.properties").inputStream())
 }
 
 android {
@@ -11,10 +17,10 @@ android {
     ndkVersion = "27.0.12077973"
 
     defaultConfig {
-        applicationId = "com.example.badminton_tournament"
+        applicationId = "com.smashlive.game_app"
         minSdk = 23
-        targetSdk = 34
-        versionCode = 1
+        targetSdk = 35
+        versionCode = 3
         versionName = "1.0.0"
         multiDexEnabled = true
     }
@@ -28,22 +34,25 @@ android {
         jvmTarget = "17"
     }
 
+    signingConfigs {
+        create("release") {
+            storeFile = file(keystoreProperties["storeFile"] as String)
+            storePassword = keystoreProperties["storePassword"] as String
+            keyAlias = keystoreProperties["keyAlias"] as String
+            keyPassword = keystoreProperties["keyPassword"] as String
+        }
+    }
+
     buildTypes {
-        release {
-            signingConfig = signingConfigs.getByName("debug")
+        getByName("release") {
+            isMinifyEnabled = false
+            isShrinkResources = false
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 }
-
 dependencies {
-    implementation(platform("com.google.firebase:firebase-bom:33.1.2"))
+    implementation("com.google.android.play:integrity:1.4.0")
+    implementation(platform("com.google.firebase:firebase-bom:34.0.0"))
     implementation("com.google.firebase:firebase-auth")
-    implementation("com.google.firebase:firebase-firestore")
-    implementation("androidx.multidex:multidex:2.0.1")
-    implementation("com.google.firebase:firebase-database:19.0.0")
-    implementation ("com.google.firebase:firebase-storage:19.1.1")
-}
-
-flutter {
-    source = "../.."
 }

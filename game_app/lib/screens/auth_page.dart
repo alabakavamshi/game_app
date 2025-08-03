@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:country_code_picker/country_code_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:game_app/blocs/auth/auth_bloc.dart';
@@ -28,10 +29,10 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
   late final TextEditingController _phoneController;
   late final TextEditingController _passwordController;
   late final TextEditingController _confirmPasswordController;
-  late final TextEditingController _otpController;
+  late final List<TextEditingController> _otpControllers;
   AuthBloc? _authBloc;
 
-   bool _isSignup = false;
+  bool _isSignup = false;
   bool _usePhone = false;
   bool _showOtpField = false;
   String? _verificationId;
@@ -71,15 +72,16 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
     'assets/sketch4.jpeg',
   ];
 
+  CountryCode _selectedCountry = CountryCode(
+    code: 'IN',
+    name: 'India',
+    dialCode: '+91',
+  );
+
   @override
   void initState() {
     super.initState();
-    _emailController = TextEditingController();
-    _phoneController = TextEditingController();
-    _passwordController = TextEditingController();
-    _confirmPasswordController = TextEditingController();
-    _otpController = TextEditingController();
-
+    _initializeControllers();
     try {
       _passwordController.addListener(_validatePasswordConstraints);
 
@@ -107,6 +109,40 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
     }
   }
 
+  void _initializeControllers() {
+    _emailController = TextEditingController();
+    _phoneController = TextEditingController();
+    _passwordController = TextEditingController();
+    _confirmPasswordController = TextEditingController();
+    _otpControllers = List.generate(6, (_) => TextEditingController());
+  }
+
+  void _resetAllData() {
+    _emailController.clear();
+    _phoneController.clear();
+    _passwordController.clear();
+    _confirmPasswordController.clear();
+    for (var controller in _otpControllers) {
+      controller.clear();
+    }
+    setState(() {
+      _showOtpField = false;
+      _verificationId = null;
+      _selectedRole = widget.role != null && _availableRoles.contains(widget.role)
+          ? widget.role
+          : null;
+      _selectedGender = null;
+      _selectedProfileImageIndex = null;
+      _signupStep = 0;
+      _isSignupFromState = false;
+      _hasMinLength = false;
+      _hasUppercase = false;
+      _hasNumber = false;
+      _hasSpecialChar = false;
+    });
+    debugPrint('All auth data reset');
+  }
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -120,7 +156,9 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
     _phoneController.dispose();
     _passwordController.dispose();
     _confirmPasswordController.dispose();
-    _otpController.dispose();
+    for (var controller in _otpControllers) {
+      controller.dispose();
+    }
     _logoController.dispose();
     _verificationController.dispose();
     super.dispose();
@@ -134,23 +172,24 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
         return;
       }
 
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(user.uid)
-          .set({
-            'testTimestamp': FieldValue.serverTimestamp(),
-          }, SetOptions(merge: true));
+      await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
+        'testTimestamp': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
 
       debugPrint('Firestore connectivity test successful');
     } on FirebaseException catch (e) {
-      debugPrint('Firestore connectivity test failed: ${e.code} - ${e.message}');
+      debugPrint(
+        'Firestore connectivity test failed: ${e.code} - ${e.message}',
+      );
       if (mounted) {
         if (e.code == 'permission-denied') {
           toastification.show(
             context: context,
             type: ToastificationType.error,
             title: const Text('Permission Denied'),
-            description: const Text('You don\'t have permission to access this data'),
+            description: const Text(
+              'You don\'t have permission to access this data',
+            ),
             autoCloseDuration: const Duration(seconds: 5),
           );
         } else {
@@ -202,22 +241,98 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
 
   String _normalizePhoneNumber(String phone) {
     phone = phone.trim();
-    if (!phone.startsWith('+91')) return '+91$phone';
+    if (!phone.startsWith(_selectedCountry.dialCode as Pattern)) {
+      return '${_selectedCountry.dialCode}$phone';
+    }
     return phone;
   }
 
+  Widget _buildPhoneInput() {
+    return AnimationConfiguration.staggeredList(
+      position: 2,
+      duration: const Duration(milliseconds: 500),
+      child: SlideAnimation(
+        verticalOffset: 50.0,
+        child: FadeInAnimation(
+          child: Row(
+            children: [
+              Container(
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.1),
+                  borderRadius: const BorderRadius.only(
+                    topLeft: Radius.circular(12),
+                    bottomLeft: Radius.circular(12),
+                  ),
+                  border: Border.all(color: Colors.white.withOpacity(0.2)),
+                ),
+                child: CountryCodePicker(
+                  onChanged: (CountryCode country) {
+                    setState(() {
+                      _selectedCountry = country;
+                    });
+                  },
+                  initialSelection: 'IN',
+                  favorite: ['+91', 'IN'],
+                  showCountryOnly: false,
+                  showOnlyCountryWhenClosed: false,
+                  alignLeft: false,
+                  textStyle: GoogleFonts.poppins(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w500,
+                  ),
+                  dialogTextStyle: GoogleFonts.poppins(
+                    color: const Color.fromARGB(255, 240, 202, 202),
+                    fontSize: 16,
+                  ),
+                  searchDecoration: InputDecoration(
+                    hintText: 'Search country...',
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                  dialogBackgroundColor: const Color.fromARGB(255, 0, 0, 0),
+                  backgroundColor: const Color.fromARGB(0, 4, 4, 4),
+                  flagWidth: 25,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 16,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 1),
+              Expanded(
+                child: _buildModernTextField(
+                  controller: _phoneController,
+                  label: 'Phone Number',
+                  icon: Icons.phone,
+                  keyboardType: TextInputType.phone,
+                  isPhone: true,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   String? _validateEmail(String email) {
+    if (email.isEmpty) return null; // Email is optional for phone signup
     final emailRegExp = RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$');
-    if (email.isEmpty) return 'Email cannot be empty';
     if (!emailRegExp.hasMatch(email)) return 'Invalid email format';
     return null;
   }
 
   String? _validatePhone(String phone) {
-    final phoneRegExp = RegExp(r'^\+91\d{10}$');
     phone = _normalizePhoneNumber(phone);
     if (phone.isEmpty) return 'Phone number cannot be empty';
-    if (!phoneRegExp.hasMatch(phone)) return 'Invalid phone number format (10 digits required)';
+    if (phone.length < 8 || phone.length > 15) {
+      return 'Invalid phone number length';
+    }
+    if (!RegExp(r'^\+[0-9]{1,4}[0-9]{7,14}$').hasMatch(phone)) {
+      return 'Invalid phone number format';
+    }
     return null;
   }
 
@@ -284,7 +399,9 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
     }
 
     try {
-      await firebase_auth.FirebaseAuth.instance.sendPasswordResetEmail(email: email);
+      await firebase_auth.FirebaseAuth.instance.sendPasswordResetEmail(
+        email: email,
+      );
       if (mounted) {
         toastification.show(
           context: context,
@@ -370,11 +487,10 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
       Position position = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.medium,
       );
-      debugPrint('Location fetched: ${position.latitude}, ${position.longitude}');
-      return {
-        'latitude': position.latitude,
-        'longitude': position.longitude,
-      };
+      debugPrint(
+        'Location fetched: ${position.latitude}, ${position.longitude}',
+      );
+      return {'latitude': position.latitude, 'longitude': position.longitude};
     } catch (e, stackTrace) {
       debugPrint('Failed to fetch location: $e\nStack: $stackTrace');
       return null;
@@ -548,7 +664,6 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
       final data = userDoc.data()!;
       final bool isMissingDetails = data['firstName'] == null ||
           data['lastName'] == null ||
-          (data['email'] == null || data['email'].isEmpty) ||
           (data['phone'] == null || data['phone'].isEmpty) ||
           data['profileImage'] == null ||
           data['gender'] == null;
@@ -747,7 +862,7 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
             context: context,
             type: ToastificationType.error,
             title: const Text('Validation Error'),
-            description: const Text('Email already in use'),
+            description: const Text('Email already in use. Please login.'),
             autoCloseDuration: const Duration(seconds: 2),
           );
           debugPrint('Email already in use: $email');
@@ -812,8 +927,10 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
               context: context,
               type: ToastificationType.error,
               title: const Text('Validation Error'),
-              description: const Text('Phone number already in use. Please login.'),
-              autoCloseDuration: const Duration(seconds: 2),
+              description: const Text(
+                'Phone number already in use. Please login with this number or use a different one.',
+              ),
+              autoCloseDuration: const Duration(seconds: 3),
             );
             debugPrint('Phone already in use: $phone');
           }
@@ -826,8 +943,10 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
               context: context,
               type: ToastificationType.error,
               title: const Text('Validation Error'),
-              description: const Text('No account found with this phone number. Please sign up.'),
-              autoCloseDuration: const Duration(seconds: 2),
+              description: const Text(
+                'No account found with this phone number. Please sign up.',
+              ),
+              autoCloseDuration: const Duration(seconds: 3),
             );
             debugPrint('Phone not found: $phone');
           }
@@ -874,7 +993,7 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
                 description: Text('Error: ${e.message}'),
                 autoCloseDuration: const Duration(seconds: 2),
               );
-              debugPrint('Verification failed: ${e.message}');
+              debugPrint('Verification failed: ${e.message} Code: ${e.code}');
             }
           },
           codeSent: (verificationId, _) {
@@ -897,7 +1016,8 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
           codeAutoRetrievalTimeout: (_) {},
         );
       } else {
-        if (_otpController.text.length != 6 || _verificationId == null) {
+        final otp = _otpControllers.map((c) => c.text).join();
+        if (otp.length != 6 || _verificationId == null) {
           if (mounted) {
             setState(() => _isPhoneLinkingInProgress = false);
             toastification.show(
@@ -915,16 +1035,14 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
         setState(() => _isPhoneLinkingInProgress = true);
         final credential = firebase_auth.PhoneAuthProvider.credential(
           verificationId: _verificationId!,
-          smsCode: _otpController.text.trim(),
+          smsCode: otp,
         );
         try {
-          final userCredential = await firebase_auth.FirebaseAuth.instance
-              .signInWithCredential(credential);
+          final userCredential =
+              await firebase_auth.FirebaseAuth.instance.signInWithCredential(credential);
           if (_isSignup) {
             setState(() => _isSignupFromState = true);
-            _authBloc!.add(
-              AuthRefreshProfileEvent(userCredential.user!.uid),
-            );
+            _authBloc!.add(AuthRefreshProfileEvent(userCredential.user!.uid));
           } else {
             _checkAndCompleteMissingDetails(userCredential.user!.uid);
           }
@@ -958,11 +1076,7 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
     }
   }
 
-  Future<void> _collectPhoneSignupDetails(
-    BuildContext context,
-    String uid,
-    String role,
-  ) async {
+  Future<void> _collectPhoneSignupDetails(BuildContext context, String uid, String role) async {
     if (!mounted || _isDialogOpen || _authBloc == null) {
       debugPrint('Dialog already open or widget not mounted, skipping dialog for UID: $uid');
       return;
@@ -1007,81 +1121,21 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
                       Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          _buildStepIndicator(0, "Basic Info"),
+                          _buildStepIndicator(0, "Profile"),
                           _buildStepConnector(),
-                          _buildStepIndicator(1, "Profile"),
+                          _buildStepIndicator(1, "Basic Info"),
                           _buildStepConnector(),
-                          _buildStepIndicator(2, "Verification"),
+                          _buildStepIndicator(2, "Role"),
                           _buildStepConnector(),
-                          _buildStepIndicator(3, "Gender"),
+                          _buildStepIndicator(3, "Email"),
+                          _buildStepConnector(),
+                          _buildStepIndicator(4, "Gender"),
                         ],
                       ),
                       const SizedBox(height: 20),
-
                       if (_signupStep == 0) ...[
                         Text(
-                          'Step 1: Basic Information',
-                          style: GoogleFonts.poppins(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 22,
-                          ),
-                        ),
-                        const SizedBox(height: 20),
-                        _buildModernTextField(
-                          controller: emailController,
-                          label: 'Email',
-                          icon: Icons.email,
-                        ),
-                        const SizedBox(height: 16),
-                        _buildModernTextField(
-                          controller: passwordController,
-                          label: 'Password',
-                          icon: Icons.lock,
-                          obscureText: localObscurePhonePassword,
-                          suffixIcon: IconButton(
-                            icon: Icon(
-                              localObscurePhonePassword
-                                  ? Icons.visibility
-                                  : Icons.visibility_off,
-                              color: Colors.white70,
-                            ),
-                            onPressed: () => setDialogState(
-                                () => localObscurePhonePassword = !localObscurePhonePassword),
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        _buildModernTextField(
-                          controller: confirmPasswordController,
-                          label: 'Confirm Password',
-                          icon: Icons.lock,
-                          obscureText: localObscurePhoneConfirmPassword,
-                          suffixIcon: IconButton(
-                            icon: Icon(
-                              localObscurePhoneConfirmPassword
-                                  ? Icons.visibility
-                                  : Icons.visibility_off,
-                              color: Colors.white70,
-                            ),
-                            onPressed: () => setDialogState(
-                                () => localObscurePhoneConfirmPassword = !localObscurePhoneConfirmPassword),
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        _buildModernTextField(
-                          controller: firstNameController,
-                          label: 'First Name',
-                          icon: Icons.person,
-                        ),
-                        const SizedBox(height: 16),
-                        _buildModernTextField(
-                          controller: lastNameController,
-                          label: 'Last Name',
-                          icon: Icons.person,
-                        ),
-                      ] else if (_signupStep == 1) ...[
-                        Text(
-                          'Step 2: Select Profile Image',
+                          'Step 1: Select Profile Image',
                           style: GoogleFonts.poppins(
                             color: Colors.white,
                             fontWeight: FontWeight.bold,
@@ -1126,9 +1180,9 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
                             );
                           },
                         ),
-                      ] else if (_signupStep == 2) ...[
+                      ] else if (_signupStep == 1) ...[
                         Text(
-                          'Step 3: Verify Email',
+                          'Step 2: Basic Information',
                           style: GoogleFonts.poppins(
                             color: Colors.white,
                             fontWeight: FontWeight.bold,
@@ -1136,56 +1190,110 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
                           ),
                         ),
                         const SizedBox(height: 20),
+                        _buildModernTextField(
+                          controller: firstNameController,
+                          label: 'First Name',
+                          icon: Icons.person,
+                        ),
+                        const SizedBox(height: 16),
+                        _buildModernTextField(
+                          controller: lastNameController,
+                          label: 'Last Name',
+                          icon: Icons.person,
+                        ),
+                      ] else if (_signupStep == 2) ...[
                         Text(
-                          'A verification email has been sent to ${emailController.text.trim()}. Please verify it to proceed.',
+                          'Step 3: Select Role',
                           style: GoogleFonts.poppins(
-                            color: Colors.white70,
-                            fontSize: 16,
-                            letterSpacing: 1,
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 22,
                           ),
-                          textAlign: TextAlign.center,
                         ),
                         const SizedBox(height: 20),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            _buildModernButton(
-                              text: 'Resend Email',
-                              gradient: const LinearGradient(
-                                colors: [Colors.orangeAccent, Colors.orange],
+                            Text(
+                              'Select Your Role',
+                              style: GoogleFonts.poppins(
+                                color: Colors.white,
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
                               ),
-                              onPressed: () async {
-                                final user = firebase_auth.FirebaseAuth.instance.currentUser;
-                                if (user != null) {
-                                  await _sendVerificationEmail(user);
-                                }
-                              },
                             ),
-                            _buildModernButton(
-                              text: _isVerificationInProgress ? 'Verifying...' : 'I Have Verified',
-                              gradient: const LinearGradient(
-                                colors: [Colors.cyanAccent, Colors.blueAccent],
-                              ),
-                              onPressed: _isVerificationInProgress
-                                  ? null
-                                  : () async {
-                                      final user = firebase_auth.FirebaseAuth.instance.currentUser;
-                                      if (user != null) {
-                                        bool isVerified = await _checkEmailVerification(user);
-                                        if (isVerified && mounted && !isDialogClosing) {
-                                          setDialogState(() {
-                                            _signupStep++;
-                                            debugPrint('Advanced to step $_signupStep');
-                                          });
-                                        }
-                                      }
+                            const SizedBox(height: 10),
+                            Wrap(
+                              spacing: 10,
+                              runSpacing: 10,
+                              children: _availableRoles.map((role) => ChoiceChip(
+                                    label: Text(
+                                      role.toUpperCase(),
+                                      style: GoogleFonts.poppins(
+                                        color: _selectedRole == role ? Colors.white : Colors.grey,
+                                      ),
+                                    ),
+                                    selected: _selectedRole == role,
+                                    selectedColor: Colors.blueAccent,
+                                    backgroundColor: Colors.white.withOpacity(0.1),
+                                    onSelected: (selected) {
+                                      setDialogState(() {
+                                        _selectedRole = selected ? role : null;
+                                      });
+                                      debugPrint('Selected role: $_selectedRole');
                                     },
+                                  )).toList(),
                             ),
                           ],
                         ),
                       ] else if (_signupStep == 3) ...[
                         Text(
-                          'Step 4: Select Gender',
+                          'Step 4: Add Email (Optional)',
+                          style: GoogleFonts.poppins(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 22,
+                          ),
+                        ),
+                        const SizedBox(height: 20),
+                        _buildModernTextField(
+                          controller: emailController,
+                          label: 'Email (Optional)',
+                          icon: Icons.email,
+                        ),
+                        const SizedBox(height: 16),
+                        _buildModernTextField(
+                          controller: passwordController,
+                          label: 'Password (Required if Email is provided)',
+                          icon: Icons.lock,
+                          obscureText: localObscurePhonePassword,
+                          suffixIcon: IconButton(
+                            icon: Icon(
+                              localObscurePhonePassword ? Icons.visibility : Icons.visibility_off,
+                              color: Colors.white70,
+                            ),
+                            onPressed: () =>
+                                setDialogState(() => localObscurePhonePassword = !localObscurePhonePassword),
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        _buildModernTextField(
+                          controller: confirmPasswordController,
+                          label: 'Confirm Password (Required if Email is provided)',
+                          icon: Icons.lock,
+                          obscureText: localObscurePhoneConfirmPassword,
+                          suffixIcon: IconButton(
+                            icon: Icon(
+                              localObscurePhoneConfirmPassword ? Icons.visibility : Icons.visibility_off,
+                              color: Colors.white70,
+                            ),
+                            onPressed: () => setDialogState(
+                                () => localObscurePhoneConfirmPassword = !localObscurePhoneConfirmPassword),
+                          ),
+                        ),
+                      ] else if (_signupStep == 4) ...[
+                        Text(
+                          'Step 5: Select Gender',
                           style: GoogleFonts.poppins(
                             color: Colors.white,
                             fontWeight: FontWeight.bold,
@@ -1212,14 +1320,12 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
                                       _selectedGender = value;
                                     });
                                   },
-                                  fillColor: MaterialStateProperty.resolveWith<Color>(
-                                    (Set<MaterialState> states) {
-                                      if (states.contains(MaterialState.selected)) {
-                                        return Colors.cyanAccent;
-                                      }
-                                      return Colors.white;
-                                    },
-                                  ),
+                                  fillColor: MaterialStateProperty.resolveWith<Color>((Set<MaterialState> states) {
+                                    if (states.contains(MaterialState.selected)) {
+                                      return Colors.cyanAccent;
+                                    }
+                                    return Colors.white;
+                                  }),
                                 ),
                                 tileColor: Colors.white.withOpacity(0.1),
                                 shape: RoundedRectangleBorder(
@@ -1242,107 +1348,26 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
                               ),
                               onPressed: () {
                                 setDialogState(() {
-                                  if (_signupStep == 2) {
-                                    setState(() => _isVerificationInProgress = false);
-                                  }
                                   _signupStep--;
+                                  if (_signupStep == 0) {
+                                    _selectedRole = null;
+                                    _selectedGender = null;
+                                  } else if (_signupStep == 2) {
+                                    _selectedGender = null;
+                                  }
                                   debugPrint('Back to step $_signupStep');
                                 });
                               },
                             ),
                           _buildModernButton(
-                            text: _signupStep < 3 ? 'Next' : 'Complete',
+                            text: _signupStep < 4 ? 'Next' : 'Complete',
                             gradient: const LinearGradient(
                               colors: [Colors.cyanAccent, Colors.blueAccent],
                             ),
                             onPressed: () async {
                               if (isDialogClosing) return;
-                              if (_signupStep < 3) {
-                                if (_signupStep == 0) {
-                                  if (emailController.text.isEmpty ||
-                                      passwordController.text.isEmpty ||
-                                      confirmPasswordController.text.isEmpty ||
-                                      firstNameController.text.isEmpty ||
-                                      lastNameController.text.isEmpty) {
-                                    toastification.show(
-                                      context: dialogContext,
-                                      type: ToastificationType.error,
-                                      title: const Text('Validation Error'),
-                                      description: const Text('Please fill all fields'),
-                                      autoCloseDuration: const Duration(seconds: 2),
-                                    );
-                                    return;
-                                  }
-                                  if (passwordController.text != confirmPasswordController.text) {
-                                    toastification.show(
-                                      context: dialogContext,
-                                      type: ToastificationType.error,
-                                      title: const Text('Validation Error'),
-                                      description: const Text('Passwords do not match'),
-                                      autoCloseDuration: const Duration(seconds: 2),
-                                    );
-                                    return;
-                                  }
-                                  final emailError = _validateEmail(emailController.text.trim());
-                                  if (emailError != null) {
-                                    toastification.show(
-                                      context: dialogContext,
-                                      type: ToastificationType.error,
-                                      title: const Text('Validation Error'),
-                                      description: Text(emailError),
-                                      autoCloseDuration: const Duration(seconds: 2),
-                                    );
-                                    return;
-                                  }
-                                  final passwordError = _validatePassword(passwordController.text);
-                                  if (passwordError != null) {
-                                    toastification.show(
-                                      context: dialogContext,
-                                      type: ToastificationType.error,
-                                      title: const Text('Validation Error'),
-                                      description: Text(passwordError),
-                                      autoCloseDuration: const Duration(seconds: 2),
-                                    );
-                                    return;
-                                  }
-                                  final isEmailUnique =
-                                      await _checkFieldUniqueness('email', emailController.text.trim());
-                                  if (!isEmailUnique) {
-                                    toastification.show(
-                                      context: dialogContext,
-                                      type: ToastificationType.error,
-                                      title: const Text('Validation Error'),
-                                      description: const Text('Email already in use'),
-                                      autoCloseDuration: const Duration(seconds: 2),
-                                    );
-                                    return;
-                                  }
-                                  try {
-                                    final user = firebase_auth.FirebaseAuth.instance.currentUser;
-                                    if (user != null) {
-                                      final credential = firebase_auth.EmailAuthProvider.credential(
-                                        email: emailController.text.trim(),
-                                        password: passwordController.text,
-                                      );
-                                      await user.linkWithCredential(credential);
-                                      await _sendVerificationEmail(user);
-                                      setDialogState(() {
-                                        _signupStep++;
-                                        debugPrint('Advanced to step $_signupStep');
-                                      });
-                                    }
-                                  } catch (e, stackTrace) {
-                                    debugPrint('Error linking email: $e\nStack: $stackTrace');
-                                    toastification.show(
-                                      context: dialogContext,
-                                      type: ToastificationType.error,
-                                      title: const Text('Error'),
-                                      description: Text('Failed to link email: $e'),
-                                      autoCloseDuration: const Duration(seconds: 2),
-                                    );
-                                    return;
-                                  }
-                                } else if (_signupStep == 1 && _selectedProfileImageIndex == null) {
+                              if (_signupStep < 4) {
+                                if (_signupStep == 0 && _selectedProfileImageIndex == null) {
                                   toastification.show(
                                     context: dialogContext,
                                     type: ToastificationType.error,
@@ -1351,6 +1376,106 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
                                     autoCloseDuration: const Duration(seconds: 2),
                                   );
                                   return;
+                                } else if (_signupStep == 1 &&
+                                    (firstNameController.text.isEmpty || lastNameController.text.isEmpty)) {
+                                  toastification.show(
+                                    context: dialogContext,
+                                    type: ToastificationType.error,
+                                    title: const Text('Validation Error'),
+                                    description: const Text('Please fill all fields'),
+                                    autoCloseDuration: const Duration(seconds: 2),
+                                  );
+                                  return;
+                                } else if (_signupStep == 2 && _selectedRole == null) {
+                                  toastification.show(
+                                    context: dialogContext,
+                                    type: ToastificationType.error,
+                                    title: const Text('Validation Error'),
+                                    description: const Text('Please select a role'),
+                                    autoCloseDuration: const Duration(seconds: 2),
+                                  );
+                                  return;
+                                } else if (_signupStep == 3) {
+                                  if (emailController.text.trim().isNotEmpty) {
+                                    final emailError = _validateEmail(emailController.text.trim());
+                                    if (emailError != null) {
+                                      toastification.show(
+                                        context: dialogContext,
+                                        type: ToastificationType.error,
+                                        title: const Text('Validation Error'),
+                                        description: Text(emailError),
+                                        autoCloseDuration: const Duration(seconds: 2),
+                                      );
+                                      return;
+                                    }
+                                    if (passwordController.text.isEmpty || confirmPasswordController.text.isEmpty) {
+                                      toastification.show(
+                                        context: dialogContext,
+                                        type: ToastificationType.error,
+                                        title: const Text('Validation Error'),
+                                        description: const Text('Password and confirmation are required when email is provided'),
+                                        autoCloseDuration: const Duration(seconds: 2),
+                                      );
+                                      return;
+                                    }
+                                    if (passwordController.text != confirmPasswordController.text) {
+                                      toastification.show(
+                                        context: dialogContext,
+                                        type: ToastificationType.error,
+                                        title: const Text('Validation Error'),
+                                        description: const Text('Passwords do not match'),
+                                        autoCloseDuration: const Duration(seconds: 2),
+                                      );
+                                      return;
+                                    }
+                                    final passwordError = _validatePassword(passwordController.text);
+                                    if (passwordError != null) {
+                                      toastification.show(
+                                        context: dialogContext,
+                                        type: ToastificationType.error,
+                                        title: const Text('Validation Error'),
+                                        description: Text(passwordError),
+                                        autoCloseDuration: const Duration(seconds: 2),
+                                      );
+                                      return;
+                                    }
+                                    final isEmailUnique = await _checkFieldUniqueness('email', emailController.text.trim());
+                                    if (!isEmailUnique) {
+                                      toastification.show(
+                                        context: dialogContext,
+                                        type: ToastificationType.error,
+                                        title: const Text('Validation Error'),
+                                        description: const Text('Email already in use. Please login with this email.'),
+                                        autoCloseDuration: const Duration(seconds: 2),
+                                      );
+                                      return;
+                                    }
+                                    try {
+                                      final user = firebase_auth.FirebaseAuth.instance.currentUser;
+                                      if (user != null) {
+                                        final credential = firebase_auth.EmailAuthProvider.credential(
+                                          email: emailController.text.trim(),
+                                          password: passwordController.text,
+                                        );
+                                        await user.linkWithCredential(credential);
+                                        await _sendVerificationEmail(user);
+                                      }
+                                    } catch (e, stackTrace) {
+                                      debugPrint('Error linking email: $e\nStack: $stackTrace');
+                                      toastification.show(
+                                        context: dialogContext,
+                                        type: ToastificationType.error,
+                                        title: const Text('Error'),
+                                        description: Text('Failed to link email: $e'),
+                                        autoCloseDuration: const Duration(seconds: 2),
+                                      );
+                                      return;
+                                    }
+                                  }
+                                  setDialogState(() {
+                                    _signupStep++;
+                                    debugPrint('Advanced to step $_signupStep');
+                                  });
                                 } else {
                                   setDialogState(() {
                                     _signupStep++;
@@ -1372,22 +1497,20 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
                                   isDialogClosing = true;
                                   final location = await _fetchUserLocation();
                                   await FirebaseFirestore.instance.collection('users').doc(uid).set({
-                                    'email': emailController.text.trim(),
+                                    'email': emailController.text.trim().isEmpty ? '' : emailController.text.trim(),
                                     'firstName': firstNameController.text.trim(),
                                     'lastName': lastNameController.text.trim(),
                                     'phone': _normalizePhoneNumber(_phoneController.text.trim()),
-                                    'role': role,
+                                    'role': _selectedRole ?? role,
                                     'gender': _selectedGender,
                                     'profileImage': _profileImages[_selectedProfileImageIndex!],
                                     'location': location,
                                     'createdAt': FieldValue.serverTimestamp(),
                                   }, SetOptions(merge: true));
-                                  debugPrint('User details saved for UID: $uid with role: $role');
+                                  debugPrint('User details saved for UID: $uid with role: $_selectedRole');
                                   Navigator.pop(dialogContext);
                                   if (mounted) {
-                                    _authBloc!.add(
-                                      AuthRefreshProfileEvent(uid),
-                                    );
+                                    _authBloc!.add(AuthRefreshProfileEvent(uid));
                                     _navigateBasedOnRole(uid);
                                   }
                                 } catch (e, stackTrace) {
@@ -1444,10 +1567,7 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
     }
   }
 
-  Future<void> _collectEmailSignupDetails(
-    BuildContext context,
-    String uid,
-  ) async {
+  Future<void> _collectEmailSignupDetails(BuildContext context, String uid) async {
     if (!mounted || _isDialogOpen || _authBloc == null) {
       debugPrint('Dialog already open or widget not mounted, skipping email dialog for UID: $uid');
       return;
@@ -1461,7 +1581,7 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
     final firstNameController = TextEditingController();
     final lastNameController = TextEditingController();
     final phoneController = TextEditingController();
-    final otpController = TextEditingController();
+    final List<TextEditingController> otpControllers = List.generate(6, (_) => TextEditingController());
     String? verificationId;
     bool isPhoneVerifying = false;
     bool isDialogClosing = false;
@@ -1491,11 +1611,11 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
                       Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          _buildStepIndicator(0, "Basic Info"),
+                          _buildStepIndicator(0, "Profile"),
                           _buildStepConnector(),
-                          _buildStepIndicator(1, "Profile"),
+                          _buildStepIndicator(1, "Basic Info"),
                           _buildStepConnector(),
-                          _buildStepIndicator(2, "Phone Verify"),
+                          _buildStepIndicator(2, "Phone"),
                           _buildStepConnector(),
                           _buildStepIndicator(3, "Gender"),
                         ],
@@ -1503,67 +1623,7 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
                       const SizedBox(height: 20),
                       if (_signupStep == 0) ...[
                         Text(
-                          'Step 1: Basic Information',
-                          style: GoogleFonts.poppins(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 22,
-                          ),
-                        ),
-                        const SizedBox(height: 20),
-                        _buildModernTextField(
-                          controller: firstNameController,
-                          label: 'First Name',
-                          icon: Icons.person,
-                        ),
-                        const SizedBox(height: 16),
-                        _buildModernTextField(
-                          controller: lastNameController,
-                          label: 'Last Name',
-                          icon: Icons.person,
-                        ),
-                        const SizedBox(height: 16),
-                        Row(
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 16,
-                              ),
-                              decoration: BoxDecoration(
-                                color: Colors.white.withOpacity(0.1),
-                                borderRadius: const BorderRadius.only(
-                                  topLeft: Radius.circular(12),
-                                  bottomLeft: Radius.circular(12),
-                                ),
-                                border: Border.all(
-                                  color: Colors.white.withOpacity(0.2),
-                                ),
-                              ),
-                              child: Text(
-                                '+91',
-                                style: GoogleFonts.poppins(
-                                  color: Colors.white,
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 1),
-                            Expanded(
-                              child: _buildModernTextField(
-                                controller: phoneController,
-                                label: 'Phone Number (Optional)',
-                                icon: Icons.phone,
-                                keyboardType: TextInputType.phone,
-                                isPhone: true,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ] else if (_signupStep == 1) ...[
-                        Text(
-                          'Step 2: Select Profile Image',
+                          'Step 1: Select Profile Image',
                           style: GoogleFonts.poppins(
                             color: Colors.white,
                             fontWeight: FontWeight.bold,
@@ -1608,9 +1668,9 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
                             );
                           },
                         ),
-                      ] else if (_signupStep == 2) ...[
+                      ] else if (_signupStep == 1) ...[
                         Text(
-                          'Step 3: Verify Phone',
+                          'Step 2: Basic Information',
                           style: GoogleFonts.poppins(
                             color: Colors.white,
                             fontWeight: FontWeight.bold,
@@ -1618,17 +1678,66 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
                           ),
                         ),
                         const SizedBox(height: 20),
-                        if (verificationId == null) ...[
-                          Text(
-                            'A verification code will be sent to ${_normalizePhoneNumber(phoneController.text.trim())}.',
-                            style: GoogleFonts.poppins(
-                              color: Colors.white70,
-                              fontSize: 16,
-                              letterSpacing: 1,
-                            ),
-                            textAlign: TextAlign.center,
+                        _buildModernTextField(
+                          controller: firstNameController,
+                          label: 'First Name',
+                          icon: Icons.person,
+                        ),
+                        const SizedBox(height: 16),
+                        _buildModernTextField(
+                          controller: lastNameController,
+                          label: 'Last Name',
+                          icon: Icons.person,
+                        ),
+                      ] else if (_signupStep == 2) ...[
+                        Text(
+                          'Step 3: Add Phone (Optional)',
+                          style: GoogleFonts.poppins(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 22,
                           ),
-                          const SizedBox(height: 20),
+                        ),
+                        const SizedBox(height: 20),
+                        Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withOpacity(0.1),
+                                borderRadius: const BorderRadius.only(
+                                  topLeft: Radius.circular(12),
+                                  bottomLeft: Radius.circular(12),
+                                ),
+                                border: Border.all(color: Colors.white.withOpacity(0.2)),
+                              ),
+                              child: Text(
+                                '+91',
+                                style: GoogleFonts.poppins(
+                                  color: Colors.white,
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 1),
+                            Expanded(
+                              child: _buildModernTextField(
+                                controller: phoneController,
+                                label: 'Phone Number (Optional)',
+                                icon: Icons.phone,
+                                keyboardType: TextInputType.phone,
+                                isPhone: true,
+                              ),
+                            ),
+                          ],
+                        ),
+                        if (verificationId != null) ...[
+                          const SizedBox(height: 16),
+                          _buildOtpFields(otpControllers),
+                        ],
+                        const SizedBox(height: 20),
+                        if (verificationId == null)
                           _buildModernButton(
                             text: isPhoneVerifying ? 'Sending...' : 'Send OTP',
                             gradient: const LinearGradient(
@@ -1649,13 +1758,15 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
                                       );
                                       return;
                                     }
-                                    final isPhoneUnique = await _checkFieldUniqueness('phone', phone, excludeUid: uid);
+                                    final isPhoneUnique =
+                                        await _checkFieldUniqueness('phone', phone, excludeUid: uid);
                                     if (!isPhoneUnique) {
                                       toastification.show(
                                         context: dialogContext,
                                         type: ToastificationType.error,
                                         title: const Text('Validation Error'),
-                                        description: const Text('Phone number already in use by another account'),
+                                        description: const Text(
+                                            'Phone number already in use by another account. Please login with this number.'),
                                         autoCloseDuration: const Duration(seconds: 2),
                                       );
                                       return;
@@ -1706,15 +1817,8 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
                                       codeAutoRetrievalTimeout: (_) {},
                                     );
                                   },
-                          ),
-                        ] else ...[
-                          _buildModernTextField(
-                            controller: otpController,
-                            label: 'Enter OTP',
-                            icon: Icons.lock,
-                            keyboardType: TextInputType.number,
-                          ),
-                          const SizedBox(height: 20),
+                          )
+                        else
                           _buildModernButton(
                             text: isPhoneVerifying ? 'Verifying...' : 'Verify OTP',
                             gradient: const LinearGradient(
@@ -1723,7 +1827,8 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
                             onPressed: isPhoneVerifying
                                 ? null
                                 : () async {
-                                    if (otpController.text.length != 6 || verificationId == null) {
+                                    final otp = otpControllers.map((c) => c.text).join();
+                                    if (otp.length != 6 || verificationId == null) {
                                       toastification.show(
                                         context: dialogContext,
                                         type: ToastificationType.error,
@@ -1736,7 +1841,7 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
                                     setDialogState(() => isPhoneVerifying = true);
                                     final credential = firebase_auth.PhoneAuthProvider.credential(
                                       verificationId: verificationId!,
-                                      smsCode: otpController.text.trim(),
+                                      smsCode: otp,
                                     );
                                     try {
                                       final user = firebase_auth.FirebaseAuth.instance.currentUser;
@@ -1761,7 +1866,6 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
                                     }
                                   },
                           ),
-                        ],
                       ] else if (_signupStep == 3) ...[
                         Text(
                           'Step 4: Select Gender',
@@ -1791,14 +1895,12 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
                                       _selectedGender = value;
                                     });
                                   },
-                                  fillColor: MaterialStateProperty.resolveWith<Color>(
-                                    (Set<MaterialState> states) {
-                                      if (states.contains(MaterialState.selected)) {
-                                        return Colors.cyanAccent;
-                                      }
-                                      return Colors.white;
-                                    },
-                                  ),
+                                  fillColor: MaterialStateProperty.resolveWith<Color>((Set<MaterialState> states) {
+                                    if (states.contains(MaterialState.selected)) {
+                                      return Colors.cyanAccent;
+                                    }
+                                    return Colors.white;
+                                  }),
                                 ),
                                 tileColor: Colors.white.withOpacity(0.1),
                                 shape: RoundedRectangleBorder(
@@ -1823,9 +1925,17 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
                                 setDialogState(() {
                                   if (_signupStep == 2) {
                                     verificationId = null;
-                                    otpController.clear();
+                                    for (var controller in otpControllers) {
+                                      controller.clear();
+                                    }
                                   }
                                   _signupStep--;
+                                  if (_signupStep == 0) {
+                                    _selectedRole = null;
+                                    _selectedGender = null;
+                                  } else if (_signupStep == 1) {
+                                    _selectedGender = null;
+                                  }
                                   debugPrint('Back to step $_signupStep');
                                 });
                               },
@@ -1838,29 +1948,7 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
                             onPressed: () async {
                               if (isDialogClosing) return;
                               if (_signupStep < 3) {
-                                if (_signupStep == 0) {
-                                  if (firstNameController.text.isEmpty || lastNameController.text.isEmpty) {
-                                    toastification.show(
-                                      context: dialogContext,
-                                      type: ToastificationType.error,
-                                      title: const Text('Validation Error'),
-                                      description: const Text('Please fill all required fields'),
-                                      autoCloseDuration: const Duration(seconds: 2),
-                                    );
-                                    return;
-                                  }
-                                  if (phoneController.text.trim().isEmpty) {
-                                    setDialogState(() {
-                                      _signupStep = 2;
-                                      debugPrint('No phone provided, skipping to step $_signupStep');
-                                    });
-                                  } else {
-                                    setDialogState(() {
-                                      _signupStep++;
-                                      debugPrint('Advanced to step $_signupStep');
-                                    });
-                                  }
-                                } else if (_signupStep == 1 && _selectedProfileImageIndex == null) {
+                                if (_signupStep == 0 && _selectedProfileImageIndex == null) {
                                   toastification.show(
                                     context: dialogContext,
                                     type: ToastificationType.error,
@@ -1869,6 +1957,21 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
                                     autoCloseDuration: const Duration(seconds: 2),
                                   );
                                   return;
+                                } else if (_signupStep == 1 &&
+                                    (firstNameController.text.isEmpty || lastNameController.text.isEmpty)) {
+                                  toastification.show(
+                                    context: dialogContext,
+                                    type: ToastificationType.error,
+                                    title: const Text('Validation Error'),
+                                    description: const Text('Please fill all required fields'),
+                                    autoCloseDuration: const Duration(seconds: 2),
+                                  );
+                                  return;
+                                } else if (_signupStep == 2 && phoneController.text.trim().isEmpty) {
+                                  setDialogState(() {
+                                    _signupStep++;
+                                    debugPrint('No phone provided, skipping to step $_signupStep');
+                                  });
                                 } else {
                                   setDialogState(() {
                                     _signupStep++;
@@ -1893,9 +1996,7 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
                                     'email': _emailController.text.trim(),
                                     'firstName': firstNameController.text.trim(),
                                     'lastName': lastNameController.text.trim(),
-                                    'phone': phoneController.text.isEmpty
-                                        ? ''
-                                        : _normalizePhoneNumber(phoneController.text.trim()),
+                                    'phone': phoneController.text.isEmpty ? '' : _normalizePhoneNumber(phoneController.text.trim()),
                                     'role': _selectedRole!,
                                     'gender': _selectedGender,
                                     'profileImage': _profileImages[_selectedProfileImageIndex!],
@@ -1905,9 +2006,7 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
                                   debugPrint('User details saved for UID: $uid with role: $_selectedRole');
                                   Navigator.pop(dialogContext);
                                   if (mounted) {
-                                    _authBloc!.add(
-                                      AuthRefreshProfileEvent(uid),
-                                    );
+                                    _authBloc!.add(AuthRefreshProfileEvent(uid));
                                     _navigateBasedOnRole(uid);
                                   }
                                 } catch (e, stackTrace) {
@@ -1949,7 +2048,9 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
       firstNameController.dispose();
       lastNameController.dispose();
       phoneController.dispose();
-      otpController.dispose();
+      for (var controller in otpControllers) {
+        controller.dispose();
+      }
       if (mounted) {
         setState(() {
           _isDialogOpen = false;
@@ -1985,25 +2086,23 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
               Wrap(
                 spacing: 10,
                 runSpacing: 10,
-                children: _availableRoles.map(
-                  (role) => ChoiceChip(
-                    label: Text(
-                      role.toUpperCase(),
-                      style: GoogleFonts.poppins(
-                        color: _selectedRole == role ? Colors.white : Colors.grey,
+                children: _availableRoles.map((role) => ChoiceChip(
+                      label: Text(
+                        role.toUpperCase(),
+                        style: GoogleFonts.poppins(
+                          color: _selectedRole == role ? Colors.white : Colors.grey,
+                        ),
                       ),
-                    ),
-                    selected: _selectedRole == role,
-                    selectedColor: Colors.blueAccent,
-                    backgroundColor: Colors.white.withOpacity(0.1),
-                    onSelected: (selected) {
-                      setState(() {
-                        _selectedRole = selected ? role : null;
-                      });
-                      debugPrint('Selected role: $_selectedRole');
-                    },
-                  ),
-                ).toList(),
+                      selected: _selectedRole == role,
+                      selectedColor: Colors.blueAccent,
+                      backgroundColor: Colors.white.withOpacity(0.1),
+                      onSelected: (selected) {
+                        setState(() {
+                          _selectedRole = selected ? role : null;
+                        });
+                        debugPrint('Selected role: $_selectedRole');
+                      },
+                    )).toList(),
               ),
             ],
           ),
@@ -2032,9 +2131,71 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
             obscureText: obscureText,
             keyboardType: keyboardType,
             style: GoogleFonts.poppins(color: Colors.white),
-            decoration: _modernInputDecoration(label, isPhone: isPhone).copyWith(
-              suffixIcon: suffixIcon,
-            ),
+            decoration: _modernInputDecoration(
+              label,
+              isPhone: isPhone,
+            ).copyWith(suffixIcon: suffixIcon),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildOtpFields(List<TextEditingController> controllers) {
+    if (controllers.length != 6) {
+      debugPrint('OTP controllers list is invalid, reinitializing');
+      controllers.clear();
+      controllers.addAll(List.generate(6, (_) => TextEditingController()));
+    }
+
+    return AnimationConfiguration.staggeredList(
+      position: 2,
+      duration: const Duration(milliseconds: 500),
+      child: SlideAnimation(
+        verticalOffset: 50.0,
+        child: FadeInAnimation(
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: List.generate(6, (index) {
+              return SizedBox(
+                width: 50,
+                child: TextField(
+                  controller: controllers[index],
+                  keyboardType: TextInputType.number,
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.poppins(
+                    color: Colors.white,
+                    fontSize: 24,
+                    fontWeight: FontWeight.w600,
+                  ),
+                  maxLength: 1,
+                  decoration: InputDecoration(
+                    counterText: '',
+                    filled: true,
+                    fillColor: Colors.white.withOpacity(0.1),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide.none,
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide(color: Colors.white.withOpacity(0.2)),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: const BorderSide(color: Colors.cyanAccent, width: 2),
+                    ),
+                  ),
+                  onChanged: (value) {
+                    if (value.length == 1 && index < 5) {
+                      FocusScope.of(context).nextFocus();
+                    } else if (value.isEmpty && index > 0) {
+                      FocusScope.of(context).previousFocus();
+                    }
+                  },
+                ),
+              );
+            }),
           ),
         ),
       ),
@@ -2048,17 +2209,17 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
     bool isLoading = false,
   }) {
     return Container(
-  decoration: BoxDecoration(
-    gradient: gradient,
-    borderRadius: BorderRadius.circular(12),
-    boxShadow: [
-      BoxShadow(
-        color: Colors.black.withOpacity(0.2),
-        blurRadius: 8,
-        offset: const Offset(0, 2),
+      decoration: BoxDecoration(
+        gradient: gradient,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.2),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
       ),
-    ],
-  ),
       child: ElevatedButton(
         onPressed: onPressed,
         style: ElevatedButton.styleFrom(
@@ -2169,389 +2330,196 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
         const SizedBox(height: 2),
         Text(
           label,
-          style: GoogleFonts.poppins(color: Colors.white70, fontSize: 10),
-        ),
-      ],
-    );
-  }
+          style: GoogleFonts.poppins(
+            color: Colors.white,
+                          fontSize: 12,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      );
+    }
 
-  Widget _buildStepConnector() {
-    return Container(
-      width: 20,
-      height: 2,
-      margin: const EdgeInsets.symmetric(horizontal: 2),
-      color: Colors.white70,
-    );
-  }
+    Widget _buildStepConnector() {
+      return Container(
+        width: 30,
+        height: 2,
+        color: Colors.grey,
+        margin: const EdgeInsets.symmetric(horizontal: 4),
+      );
+    }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFF0B132B),
-      body: BlocListener<AuthBloc, AuthState>(
-        listener: (context, state) {
-          try {
-            debugPrint('Auth state: $state');
+    @override
+    Widget build(BuildContext context) {
+      return Scaffold(
+        backgroundColor: const Color(0xFF0B132B),
+        body: BlocListener<AuthBloc, AuthState>(
+          listener: (context, state) async {
             if (state is AuthLoading) {
-              setState(() => _isPhoneLinkingInProgress = true);
+              debugPrint('Auth loading state');
             } else if (state is AuthAuthenticated) {
-              setState(() => _isPhoneLinkingInProgress = false);
-              if (!state.user.emailVerified && state.user.email != null && !_isDialogOpen) {
-                _showEmailVerificationDialog(state.user);
-              } else if (_isSignupFromState && !_isDialogOpen) {
-                if (_usePhone) {
-                  _collectPhoneSignupDetails(context, state.user.uid, _selectedRole!).then((_) {
-                    if (mounted && !_isDialogOpen) {
-                      toastification.show(
-                        context: context,
-                        type: ToastificationType.success,
-                        title: const Text('Signup Successful'),
-                        description: const Text('Your account has been created!'),
-                        autoCloseDuration: const Duration(seconds: 2),
-                      );
-                      Future.delayed(const Duration(milliseconds: 1000), () {
-                        if (mounted) {
-                          _authBloc?.add(
-                            AuthRefreshProfileEvent(state.user.uid),
-                          );
-                          _navigateBasedOnRole(state.user.uid);
-                          setState(() => _isSignupFromState = false);
-                        }
-                      });
-                    }
-                  });
+              debugPrint('Authenticated with UID: ${state.user.uid}');
+              if (_isSignupFromState && !_usePhone) {
+                final user = firebase_auth.FirebaseAuth.instance.currentUser;
+                if (user != null && !user.emailVerified) {
+                  _showEmailVerificationDialog(user);
                 } else {
-                  _collectEmailSignupDetails(context, state.user.uid).then((_) {
-                    if (mounted && !_isDialogOpen) {
-                      _authBloc?.add(
-                        AuthRefreshProfileEvent(state.user.uid),
-                      );
-                      _navigateBasedOnRole(state.user.uid);
-                      setState(() => _isSignupFromState = false);
-                    }
-                  });
+                  await _collectEmailSignupDetails(context, state.user.uid);
                 }
-              } else if (!_isSignupFromState && !_isDialogOpen) {
-                _checkAndCompleteMissingDetails(state.user.uid);
+              } else if (!_isSignupFromState) {
+                await _checkAndCompleteMissingDetails(state.user.uid);
               }
-            } else if (state is AuthPhoneCodeSent) {
-              setState(() {
-                _isPhoneLinkingInProgress = false;
-                _showOtpField = true;
-                _verificationId = state.verificationId;
-                _isSignupFromState = state.isSignup;
-              });
             } else if (state is AuthError) {
-              setState(() {
-                _isPhoneLinkingInProgress = false;
-                _showOtpField = false;
-                _isDialogOpen = false;
-              });
+              debugPrint('Auth error: ${state.message}');
               if (mounted) {
                 toastification.show(
                   context: context,
                   type: ToastificationType.error,
-                  title: const Text('Error'),
+                  title: const Text('Authentication Error'),
                   description: Text(state.message),
                   autoCloseDuration: const Duration(seconds: 2),
                 );
-                debugPrint('Auth error: ${state.message}');
               }
             } else if (state is AuthUnauthenticated) {
-              setState(() {
-                _isPhoneLinkingInProgress = false;
-                _showOtpField = false;
-                _isDialogOpen = false;
-                _emailController.clear();
-                _phoneController.clear();
-                _passwordController.clear();
-                _confirmPasswordController.clear();
-                _otpController.clear();
-              });
+              debugPrint('Unauthenticated state');
+              _resetAllData();
             }
-          } catch (e, stackTrace) {
-            debugPrint('BlocListener error: $e\nStack: $stackTrace');
-          }
-        },
-        child: SafeArea(
-          child: Center(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 24.0,
-                vertical: 20.0,
-              ),
-              child: AnimationLimiter(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    AnimationConfiguration.staggeredList(
-                      position: 0,
+          },
+          child: SafeArea(
+            child: Center(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+                child: AnimationLimiter(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: AnimationConfiguration.toStaggeredList(
                       duration: const Duration(milliseconds: 500),
-                      child: SlideAnimation(
+                      childAnimationBuilder: (widget) => SlideAnimation(
                         verticalOffset: 50.0,
-                        child: FadeInAnimation(
+                        child: FadeInAnimation(child: widget),
+                      ),
+                      children: [
+                       
+                        Center(
                           child: Text(
-                            _isSignup ? 'Sign Up' : 'Login',
+                            _isSignup ? 'Create Account' : 'Welcome Back',
                             style: GoogleFonts.poppins(
                               color: Colors.white,
+                              fontSize: 28,
                               fontWeight: FontWeight.bold,
-                              fontSize: 32,
                               letterSpacing: 1.5,
-                              shadows: [
-                                Shadow(
-                                  color: Colors.cyanAccent.withOpacity(0.3),
-                                  blurRadius: 8,
-                                  offset: const Offset(0, 2),
-                                ),
-                              ],
                             ),
                           ),
                         ),
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                    AnimationConfiguration.staggeredList(
-                      position: 1,
-                      duration: const Duration(milliseconds: 500),
-                      child: SlideAnimation(
-                        verticalOffset: 50.0,
-                        child: FadeInAnimation(
+                        const SizedBox(height: 10),
+                        Center(
+                          child: Text(
+                            _isSignup
+                                ? 'Join us and start your journey!'
+                                : 'Login to continue your journey',
+                            style: GoogleFonts.poppins(
+                              color: Colors.white70,
+                              fontSize: 16,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 30),
+                        Center(
                           child: ToggleButtons(
                             isSelected: _authModeSelection,
                             onPressed: (index) {
                               setState(() {
-                                for (int i = 0; i < _authModeSelection.length; i++) {
-                                  _authModeSelection[i] = i == index;
-                                }
                                 _usePhone = index == 1;
+                                _authModeSelection[0] = !_usePhone;
+                                _authModeSelection[1] = _usePhone;
                                 _showOtpField = false;
-                                _otpController.clear();
+                                _verificationId = null;
+                                _resetAllData();
                               });
-                              debugPrint('Switched to ${_usePhone ? 'phone' : 'email'} auth');
                             },
                             borderRadius: BorderRadius.circular(12),
                             selectedColor: Colors.white,
-                            fillColor: Colors.cyanAccent.withOpacity(0.2),
+                            fillColor: Colors.blueAccent.withOpacity(0.8),
                             borderColor: Colors.white.withOpacity(0.2),
                             selectedBorderColor: Colors.cyanAccent,
                             children: [
                               Padding(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 20,
-                                  vertical: 10,
-                                ),
+                                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
                                 child: Text(
                                   'Email',
-                                  style: GoogleFonts.poppins(
-                                    fontSize: 16,
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.w600,
-                                  ),
+                                  style: GoogleFonts.poppins(fontSize: 16,color: Colors.white),
                                 ),
                               ),
                               Padding(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 20,
-                                  vertical: 10,
-                                ),
+                                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
                                 child: Text(
                                   'Phone',
-                                  style: GoogleFonts.poppins(
-                                    fontSize: 16,
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.w600,
-                                  ),
+                                   style: GoogleFonts.poppins(fontSize: 16,color: Colors.white),
                                 ),
                               ),
                             ],
                           ),
                         ),
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                    if (_usePhone && _showOtpField) ...[
-                      AnimationConfiguration.staggeredList(
-                        position: 2,
-                        duration: const Duration(milliseconds: 500),
-                        child: SlideAnimation(
-                          verticalOffset: 50.0,
-                          child: FadeInAnimation(
-                            child: _buildModernTextField(
-                              controller: _otpController,
-                              label: 'Enter OTP',
+                        const SizedBox(height: 20),
+                        if (!_usePhone) ...[
+                          _buildModernTextField(
+                            controller: _emailController,
+                            label: 'Email',
+                            icon: Icons.email,
+                          ),
+                          const SizedBox(height: 16),
+                          _buildModernTextField(
+                            controller: _passwordController,
+                            label: 'Password',
+                            icon: Icons.lock,
+                            obscureText: _obscurePassword,
+                            suffixIcon: IconButton(
+                              icon: Icon(
+                                _obscurePassword ? Icons.visibility : Icons.visibility_off,
+                                color: Colors.white70,
+                              ),
+                              onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+                            ),
+                          ),
+                          if (_isSignup) ...[
+                            const SizedBox(height: 16),
+                            _buildModernTextField(
+                              controller: _confirmPasswordController,
+                              label: 'Confirm Password',
                               icon: Icons.lock,
-                              keyboardType: TextInputType.number,
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                    ] else if (_usePhone) ...[
-                      AnimationConfiguration.staggeredList(
-                        position: 2,
-                        duration: const Duration(milliseconds: 500),
-                        child: SlideAnimation(
-                          verticalOffset: 50.0,
-                          child: FadeInAnimation(
-                            child: Row(
-                              children: [
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 12,
-                                    vertical: 16,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: Colors.white.withOpacity(0.1),
-                                    borderRadius: const BorderRadius.only(
-                                      topLeft: Radius.circular(12),
-                                      bottomLeft: Radius.circular(12),
-                                    ),
-                                    border: Border.all(
-                                      color: Colors.white.withOpacity(0.2),
-                                    ),
-                                  ),
-                                  child: Text(
-                                    '+91',
-                                    style: GoogleFonts.poppins(
-                                      color: Colors.white,
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 1),
-                                Expanded(
-                                  child: _buildModernTextField(
-                                    controller: _phoneController,
-                                    label: 'Phone Number',
-                                    icon: Icons.phone,
-                                    keyboardType: TextInputType.phone,
-                                    isPhone: true,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                    ] else ...[
-                      AnimationConfiguration.staggeredList(
-                        position: 2,
-                        duration: const Duration(milliseconds: 500),
-                        child: SlideAnimation(
-                          verticalOffset: 50.0,
-                          child: FadeInAnimation(
-                            child: _buildModernTextField(
-                              controller: _emailController,
-                              label: 'Email',
-                              icon: Icons.email,
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      AnimationConfiguration.staggeredList(
-                        position: 3,
-                        duration: const Duration(milliseconds: 500),
-                        child: SlideAnimation(
-                          verticalOffset: 50.0,
-                          child: FadeInAnimation(
-                            child: _buildModernTextField(
-                              controller: _passwordController,
-                              label: 'Password',
-                              icon: Icons.lock,
-                              obscureText: _obscurePassword,
+                              obscureText: _obscureConfirmPassword,
                               suffixIcon: IconButton(
                                 icon: Icon(
-                                  _obscurePassword
-                                      ? Icons.visibility
-                                      : Icons.visibility_off,
+                                  _obscureConfirmPassword ? Icons.visibility : Icons.visibility_off,
                                   color: Colors.white70,
                                 ),
-                                onPressed: () {
-                                  setState(() {
-                                    _obscurePassword = !_obscurePassword;
-                                  });
-                                },
+                                onPressed: () =>
+                                    setState(() => _obscureConfirmPassword = !_obscureConfirmPassword),
                               ),
                             ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      if (_isSignup)
-                        AnimationConfiguration.staggeredList(
-                          position: 4,
-                          duration: const Duration(milliseconds: 500),
-                          child: SlideAnimation(
-                            verticalOffset: 50.0,
-                            child: FadeInAnimation(
-                              child: _buildModernTextField(
-                                controller: _confirmPasswordController,
-                                label: 'Confirm Password',
-                                icon: Icons.lock,
-                                obscureText: _obscureConfirmPassword,
-                                suffixIcon: IconButton(
-                                  icon: Icon(
-                                    _obscureConfirmPassword
-                                        ? Icons.visibility
-                                        : Icons.visibility_off,
-                                    color: Colors.white70,
-                                  ),
-                                  onPressed: () {
-                                    setState(() {
-                                      _obscureConfirmPassword = !_obscureConfirmPassword;
-                                    });
-                                  },
-                                ),
-                              ),
+                            const SizedBox(height: 16),
+                            Column(
+                              children: [
+                                _buildPasswordRequirement('At least 8 characters', _hasMinLength),
+                                _buildPasswordRequirement('Contains uppercase letter', _hasUppercase),
+                                _buildPasswordRequirement('Contains number', _hasNumber),
+                                _buildPasswordRequirement('Contains special character', _hasSpecialChar),
+                              ],
                             ),
-                          ),
-                        ),
-                      const SizedBox(height: 16),
-                      if (_isSignup)
-                        AnimationConfiguration.staggeredList(
-                          position: 5,
-                          duration: const Duration(milliseconds: 500),
-                          child: SlideAnimation(
-                            verticalOffset: 50.0,
-                            child: FadeInAnimation(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  _buildPasswordRequirement(
-                                    'At least 8 characters',
-                                    _hasMinLength,
-                                  ),
-                                  _buildPasswordRequirement(
-                                    'Contains uppercase letter',
-                                    _hasUppercase,
-                                  ),
-                                  _buildPasswordRequirement(
-                                    'Contains number',
-                                    _hasNumber,
-                                  ),
-                                  _buildPasswordRequirement(
-                                    'Contains special character',
-                                    _hasSpecialChar,
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ),
-                    ],
-                    if (_isSignup)
-                      const SizedBox(height: 16),
-                    if (_isSignup && !_usePhone) _buildRoleSelection(),
-                    const SizedBox(height: 20),
-                    AnimationConfiguration.staggeredList(
-                      position: 7,
-                      duration: const Duration(milliseconds: 500),
-                      child: SlideAnimation(
-                        verticalOffset: 50.0,
-                        child: FadeInAnimation(
+                          ],
+                        ] else ...[
+                          _buildPhoneInput(),
+                          if (_showOtpField) ...[
+                            const SizedBox(height: 16),
+                            _buildOtpFields(_otpControllers),
+                          ],
+                        ],
+                        if (_isSignup) ...[
+                          const SizedBox(height: 16),
+                          Center(child: _buildRoleSelection()),
+                        ],
+                        const SizedBox(height: 20),
+                        Center(
                           child: _buildModernButton(
                             text: _isPhoneLinkingInProgress
                                 ? 'Processing...'
@@ -2564,74 +2532,49 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
                               colors: [Colors.cyanAccent, Colors.blueAccent],
                             ),
                             isLoading: _isPhoneLinkingInProgress,
-                            onPressed: _isPhoneLinkingInProgress
-                                ? null
-                                : _handleAuthButtonPress,
+                            onPressed: _isPhoneLinkingInProgress ? null : _handleAuthButtonPress,
                           ),
                         ),
-                      ),
+                        const SizedBox(height: 16),
+                        if (!_isSignup && !_usePhone)
+                          Center(
+                            child: TextButton(
+                              onPressed: _sendPasswordResetEmail,
+                              child: Text(
+                                'Forgot Password?',
+                                style: GoogleFonts.poppins(
+                                  color: Colors.cyanAccent,
+                                  fontSize: 14,
+                                ),
+                              ),
+                            ),
+                          ),
+                        const SizedBox(height: 16),
+                        Center(
+                          child: TextButton(
+                            onPressed: () {
+                              setState(() {
+                                _isSignup = !_isSignup;
+                                _resetAllData();
+                              });
+                            },
+                            child: Text(
+                              _isSignup ? 'Already have an account? Login' : 'Don\'t have an account? Sign Up',
+                              style: GoogleFonts.poppins(
+                                color: Colors.white70,
+                                fontSize: 14,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
-                    const SizedBox(height: 16),
-                    if (!_isSignup && !_usePhone)
-  AnimationConfiguration.staggeredList(
-    position: 8,
-    duration: const Duration(milliseconds: 500),
-    child: SlideAnimation(
-      verticalOffset: 50.0,
-      child: FadeInAnimation(
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.end, // Aligns the button to the right
-          children: [
-            TextButton(
-              onPressed: _sendPasswordResetEmail,
-              child: Text(
-                'Forgot Password?',
-                style: GoogleFonts.poppins(
-                  color: Colors.cyanAccent,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-            
-          ],
-        ),
-      ),
-    ),
-  ), 
-  const SizedBox(height: 16),
-TextButton(
-  onPressed: () {
-    setState(() {
-      _isSignup = !_isSignup;
-      // Clear relevant fields when switching modes
-      if (!_isSignup) {
-        _confirmPasswordController.clear();
-        _selectedRole = null;
-      } else {
-        _otpController.clear();
-        _showOtpField = false;
-      }
-    });
-  },
-  child: Text(
-    _isSignup 
-        ? 'Already have an account? Login'
-        : 'Don\'t have an account? Sign up',
-    style: GoogleFonts.poppins(
-      color: Colors.cyanAccent,
-      fontSize: 14,
-      fontWeight: FontWeight.w600,
-    ),
-  ),
-),
- ],
+                  ),
                 ),
               ),
             ),
           ),
         ),
-      ),
-    );
+      );
+    }
   }
-}

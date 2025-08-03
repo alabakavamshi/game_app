@@ -1,11 +1,13 @@
+import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:game_app/models/tournament.dart';
 import 'package:game_app/organiser_pages/edit_tournament_page.dart';
-import 'package:game_app/tournaments/tournament_overview_page.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 import 'package:toastification/toastification.dart';
+import 'package:timezone/timezone.dart' as tz;
+import 'package:timezone/data/latest.dart' as tz;
 
 class HostedTournamentsPage extends StatelessWidget {
   final String userId;
@@ -18,36 +20,77 @@ class HostedTournamentsPage extends StatelessWidget {
           .collection('tournaments')
           .doc(tournamentId)
           .delete();
+      debugPrint('Tournament $tournamentId deleted successfully');
     } catch (e) {
       debugPrint('Error deleting tournament: $e');
       rethrow;
     }
   }
 
-  String _formatDateRange(DateTime? start, DateTime? end) {
+  String _formatDateRange(DateTime? start, DateTime? end, String? timezone) {
     if (start == null || end == null) return 'Date not set';
-    
-    if (start.year == end.year && start.month == end.month) {
-      return '${DateFormat('MMM dd').format(start)} - ${DateFormat('dd, yyyy').format(end)}';
-    } else if (start.year == end.year) {
-      return '${DateFormat('MMM dd').format(start)} - ${DateFormat('MMM dd, yyyy').format(end)}';
+
+    // Get timezone location, default to Asia/Kolkata if invalid
+    tz.Location tzLocation;
+    try {
+      tzLocation = tz.getLocation(timezone ?? 'Asia/Kolkata');
+    } catch (e) {
+      debugPrint('Invalid timezone: $timezone, defaulting to Asia/Kolkata');
+      tzLocation = tz.getLocation('Asia/Kolkata');
     }
-    return '${DateFormat('MMM dd, yyyy').format(start)} - ${DateFormat('MMM dd, yyyy').format(end)}';
+
+    // Convert DateTime to TZDateTime in the specified timezone
+    final startInTz = tz.TZDateTime.from(start, tzLocation);
+    final endInTz = tz.TZDateTime.from(end, tzLocation);
+
+    if (startInTz.year == endInTz.year && startInTz.month == endInTz.month) {
+      return '${DateFormat('MMM dd').format(startInTz)} - ${DateFormat('dd, yyyy').format(endInTz)}';
+    } else if (startInTz.year == endInTz.year) {
+      return '${DateFormat('MMM dd').format(startInTz)} - ${DateFormat('MMM dd, yyyy').format(endInTz)}';
+    }
+    return '${DateFormat('MMM dd, yyyy').format(startInTz)} - ${DateFormat('MMM dd, yyyy').format(endInTz)}';
   }
 
   String _getTournamentStatus(Tournament tournament) {
-    final now = DateTime.now();
     if (tournament.endDate == null) {
       return 'Date not set';
     }
-    
-    if (now.isBefore(tournament.startDate)) {
+
+    // Get timezone location, default to Asia/Kolkata if invalid
+    tz.Location tzLocation;
+    try {
+      tzLocation = tz.getLocation(tournament.timezone);
+    } catch (e) {
+      debugPrint('Invalid timezone for tournament ${tournament.id}: ${tournament.timezone}, defaulting to Asia/Kolkata');
+      tzLocation = tz.getLocation('Asia/Kolkata');
+    }
+
+    final now = tz.TZDateTime.now(tzLocation);
+    final startDate = tz.TZDateTime.from(tournament.startDate, tzLocation);
+    final endDate = tz.TZDateTime.from(tournament.endDate!, tzLocation);
+
+    if (now.isBefore(startDate)) {
       return 'Upcoming';
-    } else if (now.isAfter(tournament.startDate) && now.isBefore(tournament.endDate!)) {
+    } else if (now.isAfter(startDate) && now.isBefore(endDate)) {
       return 'Live';
     } else {
       return 'Completed';
     }
+  }
+
+  bool _isWithdrawDeadlinePassed(Tournament tournament) {
+    tz.Location tzLocation;
+    try {
+      tzLocation = tz.getLocation(tournament.timezone);
+    } catch (e) {
+      debugPrint('Invalid timezone for withdraw check: ${tournament.timezone}, defaulting to Asia/Kolkata');
+      tzLocation = tz.getLocation('Asia/Kolkata');
+    }
+
+    final now = tz.TZDateTime.now(tzLocation);
+    final startDate = tz.TZDateTime.from(tournament.startDate, tzLocation);
+    final withdrawDeadline = startDate.subtract(const Duration(days: 3));
+    return now.isAfter(withdrawDeadline);
   }
 
   Color _getStatusColor(String status) {
@@ -111,6 +154,9 @@ class HostedTournamentsPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Initialize timezone data
+    tz.initializeTimeZones();
+
     return Scaffold(
       backgroundColor: const Color(0xFFFDFCFB), // Background
       appBar: AppBar(
@@ -129,11 +175,7 @@ class HostedTournamentsPage extends StatelessWidget {
         elevation: 0,
         flexibleSpace: Container(
           decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              colors: [Color(0xFF6C9A8B), Color(0xFFC1DADB)], // Primary to Secondary
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-            ),
+            color: Color(0xFF6C9A8B),
           ),
         ),
       ),
@@ -313,6 +355,16 @@ class HostedTournamentsPage extends StatelessWidget {
     String status,
     Color statusColor,
   ) {
+    final isDeadlinePassed = _isWithdrawDeadlinePassed(tournament);
+    final buttonColor = isDeadlinePassed
+        ? const Color(0xFF757575).withOpacity(0.3)
+        : const Color(0xFF6C9A8B).withOpacity(0.8);
+
+    // Get timezone display name
+    final timezoneDisplay = tournament.timezone == 'Asia/Kolkata'
+        ? 'IST (${tournament.timezone})'
+        : tournament.timezone;
+
     return Container(
       margin: const EdgeInsets.only(bottom: 20),
       decoration: BoxDecoration(
@@ -390,158 +442,185 @@ class HostedTournamentsPage extends StatelessWidget {
             ),
           ),
           // Tournament Content
-          GestureDetector(
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => TournamentOverviewPage(tournament: tournament),
+          Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Tournament Name
+                Text(
+                  tournament.name.isNotEmpty ? tournament.name : 'Unnamed Tournament',
+                  style: GoogleFonts.poppins(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w600,
+                    color: const Color(0xFF333333), // Text Primary
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                 ),
-              );
-            },
-            child: Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Tournament Name
-                  Text(
-                    tournament.name.isNotEmpty 
-                        ? tournament.name 
-                        : 'Unnamed Tournament',
-                    style: GoogleFonts.poppins(
-                      fontSize: 20,
-                      fontWeight: FontWeight.w600,
-                      color: const Color(0xFF333333), // Text Primary
+                const SizedBox(height: 12),
+                // Date Range and Timezone
+                Row(
+                  children: [
+                    Icon(
+                      Icons.calendar_today,
+                      size: 16,
+                      color: const Color(0xFF757575), // Text Secondary
                     ),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: 12),
-                  // Date Range
-                  Row(
-                    children: [
-                      Icon(
-                        Icons.calendar_today,
-                        size: 16,
-                        color: const Color(0xFF757575), // Text Secondary
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        _formatDateRange(tournament.startDate, tournament.endDate),
-                        style: GoogleFonts.poppins(
-                          fontSize: 14,
-                          color: const Color(0xFF333333), // Text Primary
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  // Venue and City
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Icon(
-                        Icons.location_on,
-                        size: 16,
-                        color: const Color(0xFF757575), // Text Secondary
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              tournament.venue.isNotEmpty 
-                                  ? tournament.venue 
-                                  : 'Venue not specified',
-                              style: GoogleFonts.poppins(
-                                fontSize: 14,
-                                color: const Color(0xFF333333), // Text Primary
-                              ),
-                            ),
-                            if (tournament.city.isNotEmpty)
-                              Text(
-                                tournament.city,
-                                style: GoogleFonts.poppins(
-                                  fontSize: 12,
-                                  color: const Color(0xFF757575), // Text Secondary
-                                ),
-                              ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  // Divider
-                  Divider(
-                    height: 1,
-                    color: const Color(0xFFA8DADC).withOpacity(0.5), // Cool Blue Highlights
-                  ),
-                  const SizedBox(height: 12),
-                 
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      // Entry Fee
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFE9C46A).withOpacity(0.1), // Mood Booster
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(
-                            color: const Color(0xFFE9C46A).withOpacity(0.3), // Mood Booster
-                            width: 1,
-                          ),
-                        ),
-                        child: Text(
-                          tournament.entryFee == 0.0 
-                              ? 'Free Entry' 
-                              : 'Entry Fee: ₹${tournament.entryFee.toStringAsFixed(0)}',
-                          style: GoogleFonts.poppins(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w500,
-                            color: const Color(0xFFE9C46A), // Mood Booster
-                          ),
-                        ),
-                      ),
-                      // Action Buttons
-                      Row(
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          // Edit Button
-                          IconButton(
-                            icon: Icon(
-                              Icons.edit,
-                              size: 20,
-                              color: const Color(0xFF6C9A8B).withOpacity(0.8), // Primary
+                          Text(
+                            _formatDateRange(tournament.startDate, tournament.endDate, tournament.timezone),
+                            style: GoogleFonts.poppins(
+                              fontSize: 14,
+                              color: const Color(0xFF333333), // Text Primary
                             ),
-                            onPressed: () {
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (context) => EditTournamentPage(tournament: tournament),
-                                ),
-                              );
-                            },
-                            tooltip: 'Edit Tournament',
                           ),
-                          // Delete Button
-                          IconButton(
-                            icon: Icon(
-                              Icons.delete,
-                              size: 20,
-                              color: const Color(0xFFE76F51).withOpacity(0.8), // Error
+                          Text(
+                            'Time in $timezoneDisplay',
+                            style: GoogleFonts.poppins(
+                              fontSize: 12,
+                              color: const Color(0xFF757575), // Text Secondary
                             ),
-                            onPressed: () => _confirmDeleteTournament(context, tournament),
-                            tooltip: 'Delete Tournament',
                           ),
                         ],
                       ),
-                    ],
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                // Venue and City
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(
+                      Icons.location_on,
+                      size: 16,
+                      color: const Color(0xFF757575), // Text Secondary
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            tournament.venue.isNotEmpty ? tournament.venue : 'Venue not specified',
+                            style: GoogleFonts.poppins(
+                              fontSize: 14,
+                              color: const Color(0xFF333333), // Text Primary
+                            ),
+                          ),
+                          if (tournament.city.isNotEmpty)
+                            Text(
+                              tournament.city,
+                              style: GoogleFonts.poppins(
+                                fontSize: 12,
+                                color: const Color(0xFF757575), // Text Secondary
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                // Divider
+                Divider(
+                  height: 1,
+                  color: const Color(0xFFA8DADC).withOpacity(0.5), // Cool Blue Highlights
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    // Entry Fee
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFE9C46A).withOpacity(0.1), // Mood Booster
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                          color: const Color(0xFFE9C46A).withOpacity(0.3), // Mood Booster
+                          width: 1,
+                        ),
+                      ),
+                      child: Text(
+                        tournament.entryFee == 0.0
+                            ? 'Free Entry'
+                            : 'Entry Fee: ₹${tournament.entryFee.toStringAsFixed(0)}',
+                        style: GoogleFonts.poppins(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                          color: const Color(0xFFE9C46A), // Mood Booster
+                        ),
+                      ),
+                    ),
+                    // Action Buttons
+                    Row(
+                      children: [
+                        Tooltip(
+                          message: isDeadlinePassed ? 'Editing disabled after withdraw deadline' : 'Edit Tournament',
+                          child: IconButton(
+                            icon: Icon(
+                              Icons.edit,
+                              size: 20,
+                              color: buttonColor,
+                            ),
+                            onPressed: isDeadlinePassed
+                                ? null
+                                : () {
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (context) => EditTournamentPage(tournament: tournament),
+                                      ),
+                                    );
+                                  },
+                          ),
+                        ),
+                        Tooltip(
+                          message: isDeadlinePassed ? 'Deletion disabled after withdraw deadline' : 'Delete Tournament',
+                          child: IconButton(
+                            icon: Icon(
+                              Icons.delete,
+                              size: 20,
+                              color: isDeadlinePassed
+                                  ? const Color(0xFF757575).withOpacity(0.3)
+                                  : const Color(0xFFE76F51).withOpacity(0.8),
+                            ),
+                            onPressed: isDeadlinePassed ? null : () => _confirmDeleteTournament(context, tournament),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+                if (isDeadlinePassed)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        Icon(
+                          Icons.lock_clock,
+                          size: 14,
+                          color: const Color(0xFF757575),
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          'Editing locked',
+                          style: GoogleFonts.poppins(
+                            fontSize: 12,
+                            color: const Color(0xFF757575),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                ],
-              ),
+              ],
             ),
           ),
         ],
@@ -550,6 +629,31 @@ class HostedTournamentsPage extends StatelessWidget {
   }
 
   Future<void> _confirmDeleteTournament(BuildContext context, Tournament tournament) async {
+    if (_isWithdrawDeadlinePassed(tournament)) {
+      toastification.show(
+        context: context,
+        type: ToastificationType.warning,
+        title: Text(
+          'Action Disabled',
+          style: GoogleFonts.poppins(
+            fontWeight: FontWeight.w500,
+            color: const Color(0xFF333333),
+          ),
+        ),
+        description: Text(
+          'Tournament cannot be deleted after withdraw deadline',
+          style: GoogleFonts.poppins(
+            color: const Color(0xFF333333),
+          ),
+        ),
+        style: ToastificationStyle.flat,
+        alignment: Alignment.bottomCenter,
+        autoCloseDuration: const Duration(seconds: 3),
+        backgroundColor: const Color(0xFFE9C46A), // Warning color
+      );
+      return;
+    }
+
     final confirm = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(

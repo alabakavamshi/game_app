@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 import 'package:game_app/umpire/matchcontrolpage.dart';
+import 'package:timezone/timezone.dart' as tz;
+import 'package:timezone/data/latest.dart' as tz;
 
 class UmpireSchedulePage extends StatefulWidget {
   final String userId;
@@ -25,6 +27,7 @@ class _UmpireSchedulePageState extends State<UmpireSchedulePage> {
   @override
   void initState() {
     super.initState();
+    tz.initializeTimeZones(); // Initialize timezone data
     _selectedDate = DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day);
     _fetchMatches();
   }
@@ -52,6 +55,14 @@ class _UmpireSchedulePageState extends State<UmpireSchedulePage> {
       for (var tournamentDoc in tournamentsSnapshot.docs) {
         final tournamentData = tournamentDoc.data();
         final matches = List<Map<String, dynamic>>.from(tournamentData['matches'] ?? []);
+        final tournamentTimezone = tournamentData['timezone']?.toString() ?? 'Asia/Kolkata';
+        tz.Location tzLocation;
+        try {
+          tzLocation = tz.getLocation(tournamentTimezone);
+        } catch (e) {
+          debugPrint('Invalid timezone for tournament ${tournamentDoc.id}: $tournamentTimezone, defaulting to Asia/Kolkata');
+          tzLocation = tz.getLocation('Asia/Kolkata');
+        }
 
         for (var match in matches) {
           try {
@@ -65,8 +76,9 @@ class _UmpireSchedulePageState extends State<UmpireSchedulePage> {
             if (matchStartTime == null) continue;
 
             final matchTime = matchStartTime.toDate();
-            final matchDateOnly = DateTime(matchTime.year, matchTime.month, matchTime.day);
-            
+            final matchTimeInTz = tz.TZDateTime.from(matchTime, tzLocation);
+            final matchDateOnly = DateTime(matchTimeInTz.year, matchTimeInTz.month, matchTimeInTz.day);
+
             matchDates.add(matchDateOnly);
 
             if (matchDateOnly.isAtSameMomentAs(DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day))) {
@@ -76,9 +88,11 @@ class _UmpireSchedulePageState extends State<UmpireSchedulePage> {
                 'tournamentName': tournamentData['name']?.toString() ?? 'Unnamed Tournament',
                 'player1': match['player1']?.toString() ?? 'TBD',
                 'player2': match['player2']?.toString() ?? 'TBD',
-                'startTime': matchTime,
-                'status': match['completed'] == true 
-                    ? 'completed' 
+                'startTime': matchTime, // Keep for compatibility
+                'startTimeInTz': matchTimeInTz,
+                'timezone': tournamentTimezone,
+                'status': match['completed'] == true
+                    ? 'completed'
                     : (match['liveScores']?['isLive'] == true ? 'ongoing' : 'scheduled'),
                 'location': (tournamentData['venue']?.isNotEmpty == true && tournamentData['city']?.isNotEmpty == true)
                     ? '${tournamentData['venue']}, ${tournamentData['city']}'
@@ -98,7 +112,7 @@ class _UmpireSchedulePageState extends State<UmpireSchedulePage> {
 
       if (mounted) {
         setState(() {
-          _matches = allMatches;
+          _matches = allMatches..sort((a, b) => (a['startTimeInTz'] as tz.TZDateTime).compareTo(b['startTimeInTz'] as tz.TZDateTime));
           _matchDates = matchDates;
           _isLoading = false;
         });
@@ -138,7 +152,7 @@ class _UmpireSchedulePageState extends State<UmpireSchedulePage> {
         );
       },
     );
-    
+
     if (picked != null && picked != _selectedDate) {
       if (mounted) {
         setState(() {
@@ -464,7 +478,9 @@ class _UmpireSchedulePageState extends State<UmpireSchedulePage> {
                         itemCount: _matches.length,
                         itemBuilder: (context, index) {
                           final match = _matches[index];
-                          final startTime = DateFormat('hh:mm a').format(match['startTime'] as DateTime);
+                          final startTimeInTz = match['startTimeInTz'] as tz.TZDateTime;
+                          final timezoneDisplay = match['timezone'] == 'Asia/Kolkata' ? 'IST' : match['timezone'];
+                          final formattedTime = DateFormat('hh:mm a').format(startTimeInTz) + ' $timezoneDisplay';
                           return Card(
                             color: const Color(0xFFFFFFFF), // Surface
                             margin: const EdgeInsets.only(bottom: 12),
@@ -509,7 +525,7 @@ class _UmpireSchedulePageState extends State<UmpireSchedulePage> {
                                       const Icon(Icons.access_time, color: Color(0xFF757575), size: 16), // Text Secondary
                                       const SizedBox(width: 4),
                                       Text(
-                                        startTime,
+                                        formattedTime,
                                         style: GoogleFonts.poppins(color: const Color(0xFF757575), fontSize: 12), // Text Secondary
                                       ),
                                       const Spacer(),
